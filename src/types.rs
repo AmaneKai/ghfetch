@@ -10,7 +10,7 @@ pub struct RateConfig {
 impl Default for RateConfig {
     fn default() -> Self {
         Self {
-            max_req: 30,
+            max_req: 10,
             window_secs: 60,
             block_secs: 300,
         }

@@ -62,6 +62,10 @@ pub async fn main(
             return err(429, "Too many requests. Slow down.");
         }
 
+        if limiter.check_username_global(&user).await? {
+            return err(429, "Too many requests for this user. Try again in a minute.");
+        }
+
         let cfg = RateConfig::default();
         if !limiter.check(&client, &user, cfg).await? {
             return err(429, "Rate limit exceeded. Try again in 5 minutes.");
