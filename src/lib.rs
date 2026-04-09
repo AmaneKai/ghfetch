@@ -1,7 +1,6 @@
 use worker::event;
 
 mod types;
-mod validation;
 mod rate_limit;
 mod github;
 mod processor;
@@ -56,7 +55,8 @@ pub async fn main(
         .map(|(_, v)| v.into_owned())
         .unwrap_or_default();
 
-    let user = match validation::valid_username(&raw) {
+
+    let user = match types::Username::new(&raw) {
         Some(u) => u,
         None => return err(400, "Invalid username format", None),
     };
