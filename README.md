@@ -17,8 +17,16 @@ https://ghfetch.carlosranara.workers.dev
 ```
 
 ```bash
-curl "https://ghfetch.carlosranara.workers.dev/?username=torvalds"
+curl "https://ghfetch.carlosranara.workers.dev/v1/stats?username=torvalds"
 ```
+
+## Endpoints
+
+| Endpoint | Description |
+|---|---|
+| `GET /v1/stats?username=<user>` | GitHub stats for a user |
+| `GET /health` | Health check |
+| `GET /` | API info |
 
 ## Response Shape
 
@@ -67,10 +75,11 @@ On error:
 | Limit | Value |
 |---|---|
 | Per IP global | 100 req/min |
-| Per IP per username | 30 req/min |
+| Per IP per username | 10 req/min |
+| Global username limit | 60 unique usernames/min |
 | Block duration | 5 min |
 
-Exceeding limits returns `429 Too Many Requests`.
+Exceeding limits returns `429 Too Many Requests` with `X-RateLimit-Remaining` and `X-RateLimit-Reset` headers.
 
 ## Deploy Your Own
 
@@ -119,7 +128,7 @@ wrangler deploy
 5. Test
 
 ```bash
-curl "https://<your-worker>.workers.dev/?username=<github-username>"
+curl "https://<your-worker>.workers.dev/v1/stats?username=<github-username>"
 ```
 
 ## Development
