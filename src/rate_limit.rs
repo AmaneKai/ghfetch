@@ -52,7 +52,7 @@ impl<'a> Limiter<'a> {
         let ttl = cfg.window_secs.saturating_sub(now - win).max(60);
 
         self.kv
-            .put(&key, &new_cnt.to_string())?
+            .put(&key, new_cnt.to_string())?
             .expiration_ttl(ttl)
             .execute()
             .await?;
@@ -92,7 +92,7 @@ impl<'a> Limiter<'a> {
         let ttl = win_secs.saturating_sub(now - win).max(60);
 
         self.kv
-            .put(&key, &new_cnt.to_string())?
+            .put(&key, new_cnt.to_string())?
             .expiration_ttl(ttl)
             .execute()
             .await?;
@@ -126,7 +126,7 @@ impl<'a> Limiter<'a> {
         let ttl = win_secs.saturating_sub(now - win).max(60);
 
         self.kv
-            .put(&key, &new_cnt.to_string())?
+            .put(&key, new_cnt.to_string())?
             .expiration_ttl(ttl)
             .execute()
             .await?;

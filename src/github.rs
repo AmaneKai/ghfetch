@@ -71,7 +71,7 @@ impl GitHubClient {
         let mut resp = worker::Fetch::Request(req).send().await?;
         
         match resp.status_code() {
-            200 => resp.json().await.map_err(|e| e.into()),
+            200 => resp.json().await,
             401 => Err(worker::Error::RustError("GitHub auth failed".into())),
             403 => Err(worker::Error::RustError("GitHub rate limit".into())),
             s => Err(worker::Error::RustError(format!("GitHub error: {}", s))),
