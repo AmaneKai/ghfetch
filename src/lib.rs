@@ -6,12 +6,16 @@ mod rate_limit;
 mod github;
 mod processor;
 mod response;
+mod tests;
 
 use types::{ClientId, RateConfig};
 use rate_limit::Limiter;
 use github::GitHubClient;
 use processor::{build_stats, process_repos};
 use response::{cors_preflight, err, success};
+use shared::github::GitHubStats;
+
+const CACHE_TTL: u64 = 300; // 5 minutes
 
 #[event(fetch)]
 pub async fn main(
@@ -62,6 +66,15 @@ pub async fn main(
         if !limiter.check(&client, &user, cfg).await? {
             return err(429, "Rate limit exceeded. Try again in 5 minutes.");
         }
+
+        // Check cache before hitting GitHub
+        let cache_key = format!("cache:{}", user.as_str());
+        if let Ok(Some(cached)) = kv_store.get(&cache_key).text().await {
+            if let Ok(stats) = serde_json::from_str::<GitHubStats>(&cached) {
+                worker::console_log!("Cache hit for {}", user.as_str());
+                return success(stats);
+            }
+        }
     }
 
     let gh = GitHubClient::new(token);
@@ -94,6 +107,19 @@ pub async fn main(
     );
 
     let stats = build_stats(gql_user, user.as_str(), repo_cnt, stars, langs, top);
+
+    // Store in cache
+    if let Some(ref kv_store) = kv {
+        if let Ok(json) = serde_json::to_string(&stats) {
+            let cache_key = format!("cache:{}", user.as_str());
+            let _ = kv_store
+                .put(&cache_key, &json)?
+                .expiration_ttl(CACHE_TTL)
+                .execute()
+                .await;
+            worker::console_log!("Cached stats for {}", user.as_str());
+        }
+    }
 
     success(stats)
 }
