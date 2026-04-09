@@ -1,5 +1,5 @@
-name = "portfolio-github-stats"
-main = "crates/worker/build/index.js"
+name = "ghfetch"
+main = "build/index.js"
 compatibility_date = "2024-01-01"
 
 [[kv_namespaces]]
@@ -8,4 +8,4 @@ id = "3e6e94fdc37e4422a513b3f93e61322e"
 
 [build]
 command = "cargo install worker-build && worker-build --release"
-cwd = "crates/worker"
+cwd = "."
