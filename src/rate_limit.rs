@@ -1,7 +1,7 @@
 use crate::types::{ClientId, RateConfig, Username};
 use worker::kv::KvStore;
 
-// Maximum unique usernames that can be queried across ALL IPs per minute
+// Maximum unique usernames queried across ALL IPs per minute
 const GLOBAL_USERNAME_MAX: u32 = 60;
 // Maximum requests per IP per minute globally
 const GLOBAL_IP_MAX: u32 = 100;
@@ -15,20 +15,21 @@ impl<'a> Limiter<'a> {
         Self { kv }
     }
 
-    pub async fn check(
+    // Returns Some((remaining, reset_secs)) if allowed, None if blocked
+    pub async fn check_with_info(
         &self,
         client: &ClientId,
         user: &Username,
         cfg: RateConfig,
-    ) -> Result<bool, worker::Error> {
+    ) -> Result<Option<(u32, u64)>, worker::Error> {
         let now = worker::Date::now().as_millis() / 1000;
         let win = (now / cfg.window_secs) * cfg.window_secs;
 
         let key = format!("rl:{}:{}:{}", client.0, user.as_str(), win);
         let block = format!("block:{}:{}", client.0, user.as_str());
 
-        if let Some(_) = self.kv.get(&block).text().await? {
-            return Ok(false);
+        if self.kv.get(&block).text().await?.is_some() {
+            return Ok(None);
         }
 
         let cnt_str = self.kv.get(&key).text().await?;
@@ -44,7 +45,7 @@ impl<'a> Limiter<'a> {
                 .execute()
                 .await?;
             worker::console_log!("Blocked: {} for {}", client.0, user.as_str());
-            return Ok(false);
+            return Ok(None);
         }
 
         let new_cnt = cnt.saturating_add(1);
@@ -58,11 +59,16 @@ impl<'a> Limiter<'a> {
 
         if new_cnt >= (cfg.max_req as f32 * 0.8) as u32 {
             worker::console_log!(
-                "Warn: {}/{} for {}", new_cnt, cfg.max_req, client.0
+                "Warn: {}/{} for {}",
+                new_cnt,
+                cfg.max_req,
+                client.0
             );
         }
 
-        Ok(true)
+        let remaining = cfg.max_req.saturating_sub(new_cnt);
+        let reset = win + cfg.window_secs;
+        Ok(Some((remaining, reset)))
     }
 
     pub async fn check_global(&self, client: &ClientId) -> Result<bool, worker::Error> {
@@ -94,7 +100,6 @@ impl<'a> Limiter<'a> {
         Ok(false)
     }
 
-    // Tracks unique usernames queried across ALL IPs per minute.
     // Prevents enumeration attacks where many IPs each query unique usernames,
     // bypassing per-IP limits and burning the GitHub token.
     pub async fn check_username_global(

@@ -12,10 +12,11 @@ use types::{ClientId, RateConfig};
 use rate_limit::Limiter;
 use github::GitHubClient;
 use processor::{build_stats, process_repos};
-use response::{cors_preflight, err, success};
+use response::{cors_preflight, err, health, success};
 use shared::github::GitHubStats;
 
 const CACHE_TTL: u64 = 300; // 5 minutes
+const VERSION: &str = "1.0.0";
 
 #[event(fetch)]
 pub async fn main(
@@ -28,10 +29,27 @@ pub async fn main(
     }
 
     if req.method() != worker::Method::Get {
-        return err(405, "Method not allowed");
+        return err(405, "Method not allowed", None);
     }
 
     let url = req.url()?;
+    let path = url.path();
+
+    // Root - API info
+    if path == "/" || path.is_empty() {
+        return response::root(VERSION);
+    }
+
+    // Health check
+    if path == "/health" {
+        return health(VERSION);
+    }
+
+    // Only accept /v1/stats
+    if path != "/v1/stats" {
+        return err(404, "Not found", None);
+    }
+
     let raw = url
         .query_pairs()
         .find(|(k, _)| k == "username")
@@ -40,7 +58,7 @@ pub async fn main(
 
     let user = match validation::valid_username(&raw) {
         Some(u) => u,
-        None => return err(400, "Invalid username format"),
+        None => return err(400, "Invalid username format", None),
     };
 
     let kv = env.kv("RATE_LIMIT_KV").ok();
@@ -50,33 +68,39 @@ pub async fn main(
         .unwrap_or_default();
 
     if token.is_empty() {
-        return err(500, "Server configuration error");
+        return err(500, "Server configuration error", None);
     }
 
     let client = ClientId::from_req(&req);
 
-    if let Some(ref kv_store) = kv {
+    // Rate limiting
+    let (remaining, reset) = if let Some(ref kv_store) = kv {
         let limiter = Limiter::new(kv_store);
 
         if limiter.check_global(&client).await? {
-            return err(429, "Too many requests. Slow down.");
+            return err(429, "Too many requests. Slow down.", Some((0, 60)));
         }
 
         if limiter.check_username_global(&user).await? {
-            return err(429, "Too many requests for this user. Try again in a minute.");
+            return err(429, "Too many requests for this user. Try again in a minute.", Some((0, 60)));
         }
 
         let cfg = RateConfig::default();
-        if !limiter.check(&client, &user, cfg).await? {
-            return err(429, "Rate limit exceeded. Try again in 5 minutes.");
+        match limiter.check_with_info(&client, &user, cfg).await? {
+            Some(info) => info,
+            None => return err(429, "Rate limit exceeded. Try again in 5 minutes.", Some((0, 300))),
         }
+    } else {
+        (10u32, 60u64)
+    };
 
-        // Check cache before hitting GitHub
+    // Cache check
+    if let Some(ref kv_store) = kv {
         let cache_key = format!("cache:{}", user.as_str());
         if let Ok(Some(cached)) = kv_store.get(&cache_key).text().await {
             if let Ok(stats) = serde_json::from_str::<GitHubStats>(&cached) {
                 worker::console_log!("Cache hit for {}", user.as_str());
-                return success(stats);
+                return success(stats, remaining, reset, true);
             }
         }
     }
@@ -88,13 +112,13 @@ pub async fn main(
             worker::console_log!("GitHub error: {:?}", e);
             let msg = e.to_string();
             let code = if msg.contains("rate limit") { 503 } else { 502 };
-            return err(code, &msg);
+            return err(code, &msg, None);
         }
     };
 
     let gql_user = match gql.data {
         Some(d) => d.user,
-        None => return err(404, "User not found"),
+        None => return err(404, "User not found", None),
     };
 
     let contributed: Vec<_> = gql_user
@@ -125,5 +149,5 @@ pub async fn main(
         }
     }
 
-    success(stats)
+    success(stats, remaining, reset, false)
 }
