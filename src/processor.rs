@@ -1,6 +1,7 @@
 use crate::types::{GqlUser, Repo};
 use shared::github::{GitHubLanguage, GitHubStats, MostStarredRepo};
 use std::collections::{HashMap, HashSet};
+use std::cmp::Reverse;
 
 pub fn process_repos(
     private: &[Repo],
@@ -32,7 +33,7 @@ pub fn process_repos(
     let cnt = seen.len() as u32;
 
     let mut langs: Vec<(String, u64)> = lang_bytes.into_iter().collect();
-    langs.sort_by(|a, b| b.1.cmp(&a.1));
+    langs.sort_by_key(|b| Reverse(b.1));
 
     let most_starred = top.map(|(n, s, u)| MostStarredRepo {
         name: n,
