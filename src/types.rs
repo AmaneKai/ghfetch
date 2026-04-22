@@ -52,7 +52,7 @@ impl Username {
         }
         Some(Self(t.to_lowercase()))
     }
-    
+
     pub fn as_str(&self) -> &str {
         &self.0
     }

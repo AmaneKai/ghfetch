@@ -17,7 +17,7 @@ query($u: String!) {
         repository {
           name stargazerCount url
           languages(first: 10, orderBy: {field: SIZE, direction: DESC}) {
-            edges { size node { name } }
+            edges { size node { name color } }
           }
         }
       }
@@ -26,7 +26,7 @@ query($u: String!) {
       nodes {
         name stargazerCount url
         languages(first: 10, orderBy: {field: SIZE, direction: DESC}) {
-          edges { size node { name } }
+          edges { size node { name color } }
         }
       }
     }
@@ -35,7 +35,7 @@ query($u: String!) {
       nodes {
         name stargazerCount url
         languages(first: 10, orderBy: {field: SIZE, direction: DESC}) {
-          edges { size node { name } }
+          edges { size node { name color } }
         }
       }
     }

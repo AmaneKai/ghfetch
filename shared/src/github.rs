@@ -5,7 +5,6 @@ use serde::{Deserialize, Serialize};
 pub struct GitHubLanguage {
     pub name: String,
     pub percentage: u32,
-    pub color: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Default)]

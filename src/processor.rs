@@ -2,11 +2,6 @@ use crate::types::{GqlUser, Repo};
 use shared::github::{GitHubLanguage, GitHubStats, MostStarredRepo};
 use std::collections::{HashMap, HashSet};
 
-const COLORS: &[&str] = &[
-    "rose-pine-foam", "rose-pine-gold", "rose-pine-iris", "rose-pine-rose",
-    "primary", "rose-pine-love", "rose-pine-pine", "rose-pine-subtle",
-];
-
 pub fn process_repos(
     private: &[Repo],
     public: &[Repo],
@@ -40,7 +35,9 @@ pub fn process_repos(
     langs.sort_by(|a, b| b.1.cmp(&a.1));
 
     let most_starred = top.map(|(n, s, u)| MostStarredRepo {
-        name: n, stars: s, url: u,
+        name: n,
+        stars: s,
+        url: u,
     });
 
     (cnt, total_stars, langs, most_starred)
@@ -51,10 +48,6 @@ fn calc_pct(bytes: u64, total: u64) -> Option<u32> {
         return None;
     }
     Some(((bytes as f64 / total as f64) * 100.0).round() as u32)
-}
-
-fn color(idx: usize) -> String {
-    COLORS[idx % COLORS.len()].to_string()
 }
 
 pub fn build_stats(
@@ -69,14 +62,12 @@ pub fn build_stats(
 
     let languages: Vec<GitHubLanguage> = langs
         .into_iter()
-        .enumerate()
-        .filter_map(|(i, (name, bytes))| {
+        .filter_map(|(name, bytes)| {
             calc_pct(bytes, total_bytes)
                 .filter(|&p| p > 0)
                 .map(|pct| GitHubLanguage {
                     name,
                     percentage: pct,
-                    color: color(i),
                 })
         })
         .collect();
