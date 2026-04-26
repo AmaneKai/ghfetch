@@ -22,16 +22,23 @@ query($u: String!) {
         }
       }
     }
-    repositories(first: 100, ownerAffiliations: [OWNER, COLLABORATOR, ORGANIZATION_MEMBER], privacy: PRIVATE) {
-      nodes {
-        name stargazerCount url
-        languages(first: 10, orderBy: {field: SIZE, direction: DESC}) {
-          edges { size node { name color } }
+    repositories(
+        first: 100, 
+        ownerAffiliations: [OWNER, COLLABORATOR, ORGANIZATION_MEMBER], 
+        orderBy: {field: PUSHED_AT, direction: DESC},
+        privacy: PRIVATE) {
+            nodes {
+                name stargazerCount url
+            languages(first: 10, orderBy: {field: SIZE, direction: DESC}) {
+              edges { size node { name color } }
+            }
         }
-      }
     }
-    publicRepositories: repositories(first: 100, ownerAffiliations: [OWNER, COLLABORATOR, ORGANIZATION_MEMBER],
-                                     privacy: PUBLIC) {
+    publicRepositories: repositories(
+        first: 100, 
+        orderBy: {field: PUSHED_AT, direction: DESC},
+        ownerAffiliations: [OWNER, COLLABORATOR, ORGANIZATION_MEMBER],
+        privacy: PUBLIC) {
       nodes {
         name stargazerCount url
         languages(first: 10, orderBy: {field: SIZE, direction: DESC}) {
