@@ -133,18 +133,23 @@ mod processor_tests {
     }
 
     #[test]
-    fn aggregates_language_bytes() {
+    fn averages_language_shares_across_repos() {
+        // repo-a: Rust=1000/1500≈0.667, C=500/1500≈0.333
+        // repo-b: Rust=500/500=1.0
+        // avg over 2: Rust≈0.833, C≈0.167
         let repos = vec![
             make_repo("repo-a", 0, vec![("Rust", 1000), ("C", 500)]),
             make_repo("repo-b", 0, vec![("Rust", 500)]),
         ];
         let (_, _, langs, _) = process_repos(&repos, &[], &[]);
         let rust = langs.iter().find(|(n, _)| n == "Rust").unwrap();
-        assert_eq!(rust.1, 1500);
+        let c = langs.iter().find(|(n, _)| n == "C").unwrap();
+        assert!((rust.1 - 0.833).abs() < 0.01, "Rust avg share should be ~0.833, got {}", rust.1);
+        assert!((c.1 - 0.167).abs() < 0.01, "C avg share should be ~0.167, got {}", c.1);
     }
 
     #[test]
-    fn sorts_languages_by_bytes_descending() {
+    fn sorts_languages_by_share_descending() {
         let repos = vec![make_repo(
             "repo",
             0,

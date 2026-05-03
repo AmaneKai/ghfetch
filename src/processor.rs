@@ -1,15 +1,15 @@
 use crate::types::{GqlUser, Repo};
 use shared::github::{GitHubLanguage, GitHubStats, MostStarredRepo};
 use std::collections::{HashMap, HashSet};
-use std::cmp::Reverse;
+use std::cmp::Ordering;
 
 pub fn process_repos(
     private: &[Repo],
     public: &[Repo],
     contributed: &[Repo],
-) -> (u32, u32, Vec<(String, u64)>, Option<MostStarredRepo>) {
+) -> (u32, u32, Vec<(String, f64)>, Option<MostStarredRepo>) {
     let mut seen = HashSet::new();
-    let mut lang_bytes: HashMap<String, u64> = HashMap::new();
+    let mut lang_shares: HashMap<String, f64> = HashMap::new();
     let mut total_stars: u32 = 0;
     let mut top: Option<(String, u32, String)> = None;
 
@@ -25,15 +25,30 @@ pub fn process_repos(
             top = Some((r.name.clone(), r.stargazer_count, r.url.clone()));
         }
 
+        let total_repo_bytes: u64 = r.languages.edges.iter().map(|e| e.size).sum();
+        if total_repo_bytes == 0 {
+            continue;
+        }
+
         for e in &r.languages.edges {
-            *lang_bytes.entry(e.node.name.clone()).or_insert(0) += e.size;
+            let share = e.size as f64 / total_repo_bytes as f64;
+            *lang_shares.entry(e.node.name.clone()).or_insert(0.0) += share;
         }
     }
 
     let cnt = seen.len() as u32;
+    let repo_count = seen.len() as f64;
 
-    let mut langs: Vec<(String, u64)> = lang_bytes.into_iter().collect();
-    langs.sort_by_key(|b| Reverse(b.1));
+    let mut langs: Vec<(String, f64)> = if repo_count > 0.0 {
+        lang_shares
+            .into_iter()
+            .map(|(name, total_share)| (name, total_share / repo_count))
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    langs.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
 
     let most_starred = top.map(|(n, s, u)| MostStarredRepo {
         name: n,
@@ -44,32 +59,19 @@ pub fn process_repos(
     (cnt, total_stars, langs, most_starred)
 }
 
-fn calc_pct(bytes: u64, total: u64) -> Option<u32> {
-    if total == 0 {
-        return None;
-    }
-    Some(((bytes as f64 / total as f64) * 100.0).round() as u32)
-}
-
 pub fn build_stats(
     user: GqlUser,
     username: &str,
     repo_cnt: u32,
     total_stars: u32,
-    langs: Vec<(String, u64)>,
+    langs: Vec<(String, f64)>,
     top_repo: Option<MostStarredRepo>,
 ) -> GitHubStats {
-    let total_bytes: u64 = langs.iter().map(|(_, b)| b).sum();
-
     let languages: Vec<GitHubLanguage> = langs
         .into_iter()
-        .filter_map(|(name, bytes)| {
-            calc_pct(bytes, total_bytes)
-                .filter(|&p| p > 0)
-                .map(|pct| GitHubLanguage {
-                    name,
-                    percentage: pct,
-                })
+        .filter_map(|(name, avg_share)| {
+            let pct = (avg_share * 100.0).round() as u32;
+            if pct > 0 { Some(GitHubLanguage { name, percentage: pct }) } else { None }
         })
         .collect();
 
