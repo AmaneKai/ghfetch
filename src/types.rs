@@ -1,61 +1,29 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy)]
-pub struct RateConfig {
-    pub max_req: u32,
-    pub window_secs: u64,
-    pub block_secs: u64,
+#[derive(Debug, Serialize)]
+pub struct LanguageResult {
+    pub name: String,
+    pub percentage: f64,
 }
 
-impl Default for RateConfig {
-    fn default() -> Self {
-        Self {
-            max_req: 10,
-            window_secs: 60,
-            block_secs: 300,
-        }
-    }
+#[derive(Debug, Serialize)]
+pub struct RepoInfo {
+    pub name: String,
+    pub stars: u32,
+    pub url: String,
 }
 
-#[derive(Debug)]
-pub struct ClientId(pub String);
-
-impl ClientId {
-    pub fn from_req(req: &worker::Request) -> Self {
-        let ip = req
-            .headers()
-            .get("CF-Connecting-IP")
-            .unwrap_or(None)
-            .unwrap_or_else(|| "unknown".to_string());
-        Self(ip)
-    }
-}
-
-#[derive(Debug)]
-pub struct Username(String);
-
-impl Username {
-    pub fn new(raw: &str) -> Option<Self> {
-        let t = raw.trim();
-        if t.is_empty() || t.len() > 39 {
-            return None;
-        }
-        let c: Vec<char> = t.chars().collect();
-        if c.first() == Some(&'-') || c.last() == Some(&'-') {
-            return None;
-        }
-        if c.windows(2).any(|w| w == ['-', '-']) {
-            return None;
-        }
-        if !c.iter().all(|&ch| ch.is_alphanumeric() || ch == '-') {
-            return None;
-        }
-        Some(Self(t.to_lowercase()))
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
+#[derive(Debug, Serialize)]
+pub struct DashboardData {
+    pub name: String,
+    pub avatar_url: String,
+    pub followers: u32,
+    pub following: u32,
+    pub total_contributions: u32,
+    pub total_commits: u32,
+    pub repo_count: u32,
+    pub languages: Vec<LanguageResult>,
+    pub most_starred_repo: Option<RepoInfo>,
 }
 
 #[derive(Deserialize)]
@@ -73,13 +41,10 @@ pub struct GqlData {
 pub struct GqlUser {
     pub avatar_url: String,
     pub name: Option<String>,
-    pub bio: Option<String>,
-    pub created_at: String,
     pub followers: CountConn,
     pub following: CountConn,
     pub contributions_collection: ContribColl,
     pub repositories: RepoConn,
-    pub public_repositories: RepoConn,
 }
 
 #[derive(Deserialize)]
@@ -93,14 +58,6 @@ pub struct CountConn {
 pub struct ContribColl {
     pub contribution_calendar: Calendar,
     pub total_commit_contributions: u32,
-    pub total_pull_request_contributions: u32,
-    pub total_issue_contributions: u32,
-    pub commit_contributions_by_repository: Vec<CommitContribByRepo>,
-}
-
-#[derive(Deserialize)]
-pub struct CommitContribByRepo {
-    pub repository: Repo,
 }
 
 #[derive(Deserialize)]
@@ -110,15 +67,17 @@ pub struct Calendar {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RepoConn {
+    pub total_count: u32,
     pub nodes: Vec<Repo>,
 }
 
 #[derive(Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct Repo {
     pub name: String,
-    #[serde(rename = "stargazerCount")]
-    pub stargazer_count: u32,
+    pub stargazerCount: u32, // Serde will map this to stargazerCount in JSON
     pub url: String,
     pub languages: LangConn,
 }
@@ -137,4 +96,15 @@ pub struct LangEdge {
 #[derive(Deserialize, Clone)]
 pub struct LangNode {
     pub name: String,
+}
+
+#[derive(Debug)]
+pub struct Username(String);
+
+impl Username {
+    pub fn new(s: &str) -> Option<Self> {
+        if s.is_empty() { return None; }
+        Some(Self(s.to_string()))
+    }
+    pub fn as_str(&self) -> &str { &self.0 }
 }
