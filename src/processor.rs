@@ -3,36 +3,39 @@ use shared::github::{GitHubLanguage, GitHubStats, MostStarredRepo};
 use std::collections::{HashMap, HashSet};
 use std::cmp::Ordering;
 
-pub fn process_repos(
-    private: &[Repo],
-    public: &[Repo],
-    contributed: &[Repo],
+pub fn process_repos<'a>(
+    private: &'a [Repo],
+    public: &'a [Repo],
+    contributed: &'a [Repo],
 ) -> (u32, u32, Vec<(String, f64)>, Option<MostStarredRepo>) {
+
     let mut seen = HashSet::new();
-    let mut lang_shares: HashMap<String, f64> = HashMap::new();
+    let mut lang_shares: HashMap<&'a str, f64> = HashMap::new();
     let mut total_stars: u32 = 0;
-    let mut top: Option<(String, u32, String)> = None;
+    let mut top: Option<(&'a str, u32, &'a str)> = None;
 
     for r in private.iter().chain(public.iter()).chain(contributed.iter()) {
-        if !seen.insert(r.name.clone()) {
+        if !seen.insert(r.name.as_str()) {
             continue;
         }
 
         total_stars = total_stars.saturating_add(r.stargazer_count);
 
         let best = top.as_ref().map(|(_, s, _)| *s).unwrap_or(0);
+
         if r.stargazer_count > best {
-            top = Some((r.name.clone(), r.stargazer_count, r.url.clone()));
+            top = Some((r.name.as_str(), r.stargazer_count, r.url.as_str()));
         }
 
         let total_repo_bytes: u64 = r.languages.edges.iter().map(|e| e.size).sum();
+
         if total_repo_bytes == 0 {
             continue;
         }
 
         for e in &r.languages.edges {
             let share = e.size as f64 / total_repo_bytes as f64;
-            *lang_shares.entry(e.node.name.clone()).or_insert(0.0) += share;
+            *lang_shares.entry(e.node.name.as_str()).or_insert(0.0) += share;
         }
     }
 
@@ -42,7 +45,7 @@ pub fn process_repos(
     let mut langs: Vec<(String, f64)> = if repo_count > 0.0 {
         lang_shares
             .into_iter()
-            .map(|(name, total_share)| (name, total_share / repo_count))
+            .map(|(name, total_share)| (name.to_string(), total_share / repo_count))
             .collect()
     } else {
         Vec::new()
@@ -51,9 +54,9 @@ pub fn process_repos(
     langs.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
 
     let most_starred = top.map(|(n, s, u)| MostStarredRepo {
-        name: n,
+        name: n.to_string(),
         stars: s,
-        url: u,
+        url: u.to_string(),
     });
 
     (cnt, total_stars, langs, most_starred)
@@ -71,7 +74,11 @@ pub fn build_stats(
         .into_iter()
         .filter_map(|(name, avg_share)| {
             let pct = (avg_share * 100.0).round() as u32;
-            if pct > 0 { Some(GitHubLanguage { name, percentage: pct }) } else { None }
+            if pct > 0 { 
+                Some(GitHubLanguage { name, percentage: pct }) 
+            } else { 
+                None 
+            }
         })
         .collect();
 

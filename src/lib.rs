@@ -1,4 +1,4 @@
-use worker::event;
+use worker::{event, Env, Request, Response, Result, Router};
 
 mod types;
 mod rate_limit;
@@ -7,7 +7,7 @@ mod processor;
 mod response;
 mod tests;
 
-use types::{ClientId, RateConfig};
+use types::{ClientId, RateConfig, Username};
 use rate_limit::Limiter;
 use github::GitHubClient;
 use processor::{build_stats, process_repos};
@@ -18,50 +18,43 @@ const CACHE_TTL: u64 = 300; // 5 minutes
 const VERSION: &str = "1.0.0";
 
 #[event(fetch)]
-pub async fn main(
-    req: worker::Request,
-    env: worker::Env,
-    _ctx: worker::Context,
-) -> Result<worker::Response, worker::Error> {
-    if req.method() == worker::Method::Options {
-        return cors_preflight();
-    }
+pub async fn main(req: Request, env: Env, _ctx: worker::Context) -> Result<Response> {
+    Router::new()
+        .options("/*", |_, _| cors_preflight())
+        .get("/", |_, _| response::root(VERSION))
+        .get("/health", |_, _| health(VERSION))
+        .get_async("/v1/stats", |req, ctx| async move {
+            handle_stats(req, ctx.env).await
+        })
+        .run(req, env)
+        .await
+}
 
-    if req.method() != worker::Method::Get {
-        return err(405, "Method not allowed", None);
-    }
-
+async fn handle_stats(req: Request, env: Env) -> Result<Response> {
     let url = req.url()?;
-    let path = url.path();
-
-    // Root - API info
-    if path == "/" || path.is_empty() {
-        return response::root(VERSION);
-    }
-
-    // Health check
-    if path == "/health" {
-        return health(VERSION);
-    }
-
-    // Only accept /v1/stats
-    if path != "/v1/stats" {
-        return err(404, "Not found", None);
-    }
-
     let raw = url
         .query_pairs()
         .find(|(k, _)| k == "username")
         .map(|(_, v)| v.into_owned())
         .unwrap_or_default();
 
-
-    let user = match types::Username::new(&raw) {
+    let user = match Username::new(&raw) {
         Some(u) => u,
         None => return err(400, "Invalid username format", None),
     };
 
     let kv = env.kv("RATE_LIMIT_KV").ok();
+    
+    if let Some(ref kv_store) = kv {
+        let cache_key = format!("cache:{}", user.as_str());
+        if let Ok(Some(cached)) = kv_store.get(&cache_key).text().await {
+            if let Ok(stats) = serde_json::from_str::<GitHubStats>(&cached) {
+                worker::console_log!("Cache hit for {}", user.as_str());
+                return success(stats, 10, 60, true);
+            }
+        }
+    }
+
     let token = env
         .secret("GITHUB_TOKEN")
         .map(|s| s.to_string())
@@ -73,7 +66,6 @@ pub async fn main(
 
     let client = ClientId::from_req(&req);
 
-    // Rate limiting
     let (remaining, reset) = if let Some(ref kv_store) = kv {
         let limiter = Limiter::new(kv_store);
 
@@ -82,28 +74,25 @@ pub async fn main(
         }
 
         if limiter.check_username_global(&user).await? {
-            return err(429, "Too many requests for this user. Try again in a minute.", Some((0, 60)));
+            return err(
+                429, 
+                "Too many requests for this user. Try again in a minute.", 
+                Some((0, 60))
+            );
         }
 
         let cfg = RateConfig::default();
         match limiter.check_with_info(&client, &user, cfg).await? {
             Some(info) => info,
-            None => return err(429, "Rate limit exceeded. Try again in 5 minutes.", Some((0, 300))),
+            None => return err(
+                429, 
+                "Rate limit exceeded. Try again in 5 minutes.", 
+                Some((0, 300))
+            ),
         }
     } else {
         (10u32, 60u64)
     };
-
-    // Cache check
-    if let Some(ref kv_store) = kv {
-        let cache_key = format!("cache:{}", user.as_str());
-        if let Ok(Some(cached)) = kv_store.get(&cache_key).text().await {
-            if let Ok(stats) = serde_json::from_str::<GitHubStats>(&cached) {
-                worker::console_log!("Cache hit for {}", user.as_str());
-                return success(stats, remaining, reset, true);
-            }
-        }
-    }
 
     let gh = GitHubClient::new(token);
     let gql = match gh.fetch(&user).await {
@@ -112,7 +101,12 @@ pub async fn main(
             worker::console_log!("GitHub error: {:?}", e);
             let msg = e.to_string();
             let code = if msg.contains("rate limit") { 503 } else { 502 };
-            return err(code, &msg, None);
+            let display_msg = if code == 503 { 
+                "GitHub API rate limit exceeded" 
+            } else { 
+                "Failed to fetch data from GitHub" 
+            };
+            return err(code, display_msg, None);
         }
     };
 
@@ -136,7 +130,6 @@ pub async fn main(
 
     let stats = build_stats(gql_user, user.as_str(), repo_cnt, stars, langs, top);
 
-    // Store in cache
     if let Some(ref kv_store) = kv {
         if let Ok(json) = serde_json::to_string(&stats) {
             let cache_key = format!("cache:{}", user.as_str());
