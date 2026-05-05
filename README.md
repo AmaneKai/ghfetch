@@ -1,5 +1,5 @@
 # ghfetch
-![CI](https://github.com/AmaneKai/ghfetch/actions/workflows/ci.yml/badge.svg)
+![CI](https://github.com/AmaneKai/ghfetch/actions/workflows/ci-cd.yml/badge.svg?branch=master)
 
 A GitHub stats API built with Rust on Cloudflare Workers. Returns aggregated repository and contribution data for any GitHub user via a single HTTP request.
 
