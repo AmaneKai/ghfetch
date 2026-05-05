@@ -1,4 +1,4 @@
-use worker::{event, Env, Request, Response, Result, Router};
+use worker::{event, Env, Request, Response, Result};
 
 mod types;
 mod rate_limit;
@@ -19,15 +19,26 @@ const VERSION: &str = "1.0.0";
 
 #[event(fetch)]
 pub async fn main(req: Request, env: Env, _ctx: worker::Context) -> Result<Response> {
-    Router::new()
-        .options("/*", |_, _| cors_preflight())
-        .get("/", |_, _| response::root(VERSION))
-        .get("/health", |_, _| health(VERSION))
-        .get_async("/v1/stats", |req, ctx| async move {
-            handle_stats(req, ctx.env).await
-        })
-        .run(req, env)
-        .await
+    if req.method() == worker::Method::Options {
+        return cors_preflight();
+    }
+
+    let url = req.url()?;
+    let path = url.path();
+
+    if path == "/" || path.is_empty() {
+        return response::root(VERSION);
+    }
+
+    if path == "/health" {
+        return health(VERSION);
+    }
+
+    if path == "/v1/stats" {
+        return handle_stats(req, env).await;
+    }
+
+    err(404, "Not found", None)
 }
 
 async fn handle_stats(req: Request, env: Env) -> Result<Response> {
@@ -45,6 +56,7 @@ async fn handle_stats(req: Request, env: Env) -> Result<Response> {
 
     let kv = env.kv("RATE_LIMIT_KV").ok();
     
+    // 1. FAST PATH: Cache check FIRST to save KV operations and GitHub token points
     if let Some(ref kv_store) = kv {
         let cache_key = format!("cache:{}", user.as_str());
         if let Ok(Some(cached)) = kv_store.get(&cache_key).text().await {
@@ -66,6 +78,7 @@ async fn handle_stats(req: Request, env: Env) -> Result<Response> {
 
     let client = ClientId::from_req(&req);
 
+    // 2. SLOW PATH: Rate limiting only if we're actually going to hit GitHub
     let (remaining, reset) = if let Some(ref kv_store) = kv {
         let limiter = Limiter::new(kv_store);
 
@@ -74,21 +87,13 @@ async fn handle_stats(req: Request, env: Env) -> Result<Response> {
         }
 
         if limiter.check_username_global(&user).await? {
-            return err(
-                429, 
-                "Too many requests for this user. Try again in a minute.", 
-                Some((0, 60))
-            );
+            return err(429, "Too many requests for this user. Try again in a minute.", Some((0, 60)));
         }
 
         let cfg = RateConfig::default();
         match limiter.check_with_info(&client, &user, cfg).await? {
             Some(info) => info,
-            None => return err(
-                429, 
-                "Rate limit exceeded. Try again in 5 minutes.", 
-                Some((0, 300))
-            ),
+            None => return err(429, "Rate limit exceeded. Try again in 5 minutes.", Some((0, 300))),
         }
     } else {
         (10u32, 60u64)
@@ -130,6 +135,7 @@ async fn handle_stats(req: Request, env: Env) -> Result<Response> {
 
     let stats = build_stats(gql_user, user.as_str(), repo_cnt, stars, langs, top);
 
+    // Store in cache
     if let Some(ref kv_store) = kv {
         if let Ok(json) = serde_json::to_string(&stats) {
             let cache_key = format!("cache:{}", user.as_str());
