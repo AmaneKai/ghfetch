@@ -59,16 +59,20 @@ pub fn err(
     msg: &str,
     rate_info: Option<(u32, u64)>,
 ) -> Result<Response, worker::Error> {
-    let headers = rate_info.map(|(remaining, reset)| {
+    let mut headers = rate_info.map(|(remaining, reset)| {
         vec![
             ("X-RateLimit-Remaining", remaining.to_string()),
             ("X-RateLimit-Reset", reset.to_string()),
         ]
-    });
+    }).unwrap_or_default();
+    
+    // Do not cache error responses
+    headers.push(("Cache-Control", "no-store, no-cache, must-revalidate".to_string()));
+
     json(
         &serde_json::json!({ "ok": false, "error": msg }),
         status,
-        headers,
+        Some(headers),
     )
 }
 

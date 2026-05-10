@@ -1,4 +1,4 @@
-use worker::event;
+use worker::{event, Env, Request, Response, Result};
 
 mod types;
 mod rate_limit;
@@ -7,63 +7,66 @@ mod processor;
 mod response;
 mod tests;
 
-use types::{ClientId, RateConfig};
+use types::{ClientId, RateConfig, Username};
 use rate_limit::Limiter;
 use github::GitHubClient;
 use processor::{build_stats, process_repos};
 use response::{cors_preflight, err, health, success};
 use shared::github::GitHubStats;
 
-use crate::processor::StatsInput;
-
 const CACHE_TTL: u64 = 300; // 5 minutes
 const VERSION: &str = "1.0.0";
 
 #[event(fetch)]
-pub async fn main(
-    req: worker::Request,
-    env: worker::Env,
-    ctx: worker::Context,
-) -> Result<worker::Response, worker::Error> {
+pub async fn main(req: Request, env: Env, _ctx: worker::Context) -> Result<Response> {
     if req.method() == worker::Method::Options {
         return cors_preflight();
-}
-
-    if req.method() != worker::Method::Get {
-        return err(405, "Method not allowed", None);
     }
 
     let url = req.url()?;
     let path = url.path();
 
-    // Root - API info
     if path == "/" || path.is_empty() {
         return response::root(VERSION);
     }
 
-    // Health check
     if path == "/health" {
         return health(VERSION);
     }
 
-    // Only accept /v1/stats
-    if path != "/v1/stats" {
-        return err(404, "Not found", None);
+    if path == "/v1/stats" {
+        return handle_stats(req, env).await;
     }
 
+    err(404, "Not found", None)
+}
+
+async fn handle_stats(req: Request, env: Env) -> Result<Response> {
+    let url = req.url()?;
     let raw = url
         .query_pairs()
         .find(|(k, _)| k == "username")
         .map(|(_, v)| v.into_owned())
         .unwrap_or_default();
 
-
-    let user = match types::Username::new(&raw) {
+    let user = match Username::new(&raw) {
         Some(u) => u,
         None => return err(400, "Invalid username format", None),
     };
 
     let kv = env.kv("RATE_LIMIT_KV").ok();
+    
+    // 1. FAST PATH: Cache check FIRST to save KV operations and GitHub token points
+    if let Some(ref kv_store) = kv {
+        let cache_key = format!("cache:{}", user.as_str());
+        if let Ok(Some(cached)) = kv_store.get(&cache_key).text().await {
+            if let Ok(stats) = serde_json::from_str::<GitHubStats>(&cached) {
+                worker::console_log!("Cache hit for {}", user.as_str());
+                return success(stats, 10, 60, true);
+            }
+        }
+    }
+
     let token = env
         .secret("GITHUB_TOKEN")
         .map(|s| s.to_string())
@@ -75,30 +78,16 @@ pub async fn main(
 
     let client = ClientId::from_req(&req);
 
-    // Rate limiting
+    // 2. SLOW PATH: Rate limiting only if we're actually going to hit GitHub
     let (remaining, reset) = if let Some(ref kv_store) = kv {
         let limiter = Limiter::new(kv_store);
-        let cache_key = format!("cache:{}", user.as_str());
 
-        let (global_hit, username_hit, cached) = futures::join!(
-            limiter.check_global(&client),
-            limiter.check_username_global(&user),
-            kv_store.get(&cache_key).text(),
-        );
-
-        if global_hit? {
+        if limiter.check_global(&client).await? {
             return err(429, "Too many requests. Slow down.", Some((0, 60)));
         }
 
-        if username_hit? {
+        if limiter.check_username_global(&user).await? {
             return err(429, "Too many requests for this user. Try again in a minute.", Some((0, 60)));
-        }
-
-        if let Ok(Some(cached_str)) = cached {
-            if let Ok(stats) = serde_json::from_str::<GitHubStats>(&cached_str) {
-                worker::console_log!("Cache hit for {}", user.as_str());
-                return success(stats, 10, 60, true);
-            }
         }
 
         let cfg = RateConfig::default();
@@ -117,7 +106,12 @@ pub async fn main(
             worker::console_log!("GitHub error: {:?}", e);
             let msg = e.to_string();
             let code = if msg.contains("rate limit") { 503 } else { 502 };
-            return err(code, &msg, None);
+            let display_msg = if code == 503 { 
+                "GitHub API rate limit exceeded" 
+            } else { 
+                "Failed to fetch data from GitHub" 
+            };
+            return err(code, display_msg, None);
         }
     };
 
@@ -126,59 +120,31 @@ pub async fn main(
         None => return err(404, "User not found", None),
     };
 
-    let crate::types::GqlUser {
-        avatar_url,
-        name,
-        bio,
-        created_at,
-        followers,
-        following,
-        mut contributions_collection,
-        repositories,
-        public_repositories,
-    } = gql_user;
-
-    let contributed: Vec<_> = contributions_collection
+    let contributed: Vec<_> = gql_user
+        .contributions_collection
         .commit_contributions_by_repository
-        .drain(..)
-        .map(|c| c.repository)
+        .iter()
+        .map(|c| c.repository.clone())
         .collect();
 
-    let all_repos = repositories.nodes.into_iter()
-        .chain(public_repositories.nodes)
-        .chain(contributed);
-
-    let (repo_cnt, stars, langs, top) = process_repos(all_repos);
-
-    let stats = build_stats(StatsInput {
-            username: user.as_str().to_string(), 
-            avatar_url, 
-            name, 
-            bio, 
-            created_at, 
-            followers, 
-            following, 
-            contributions: contributions_collection, 
-            repo_cnt, 
-            total_stars: stars, 
-            langs, 
-            top_repo: top, 
-        }
+    let (repo_cnt, stars, langs, top) = process_repos(
+        &gql_user.repositories.nodes,
+        &gql_user.public_repositories.nodes,
+        &contributed,
     );
+
+    let stats = build_stats(gql_user, user.as_str(), repo_cnt, stars, langs, top);
 
     // Store in cache
     if let Some(ref kv_store) = kv {
         if let Ok(json) = serde_json::to_string(&stats) {
             let cache_key = format!("cache:{}", user.as_str());
-            let put_future = kv_store
+            let _ = kv_store
                 .put(&cache_key, &json)?
                 .expiration_ttl(CACHE_TTL)
-                .execute();
-
-            ctx.wait_until(async move {
-                let _ = put_future.await;
-                worker::console_log!("Cached stats for {}", cache_key);
-            });
+                .execute()
+                .await;
+            worker::console_log!("Cached stats for {}", user.as_str());
         }
     }
 
