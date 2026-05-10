@@ -110,17 +110,6 @@ pub async fn main(
         (10u32, 60u64)
     };
 
-    // Cache check
-    if let Some(ref kv_store) = kv {
-        let cache_key = format!("cache:{}", user.as_str());
-        if let Ok(Some(cached)) = kv_store.get(&cache_key).text().await {
-            if let Ok(stats) = serde_json::from_str::<GitHubStats>(&cached) {
-                worker::console_log!("Cache hit for {}", user.as_str());
-                return success(stats, remaining, reset, true);
-            }
-        }
-    }
-
     let gh = GitHubClient::new(token);
     let gql = match gh.fetch(&user).await {
         Ok(r) => r,
