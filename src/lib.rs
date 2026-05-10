@@ -55,8 +55,8 @@ async fn handle_stats(req: Request, env: Env) -> Result<Response> {
     };
 
     let kv = env.kv("RATE_LIMIT_KV").ok();
-    
-    // 1. FAST PATH: Cache check FIRST to save KV operations and GitHub token points
+
+    // 1. FAST PATH: Cache check first, skip rate limiting entirely on hit
     if let Some(ref kv_store) = kv {
         let cache_key = format!("cache:{}", user.as_str());
         if let Ok(Some(cached)) = kv_store.get(&cache_key).text().await {
@@ -82,11 +82,16 @@ async fn handle_stats(req: Request, env: Env) -> Result<Response> {
     let (remaining, reset) = if let Some(ref kv_store) = kv {
         let limiter = Limiter::new(kv_store);
 
-        if limiter.check_global(&client).await? {
+        let (global_hit, username_hit) = futures::join!(
+            limiter.check_global(&client),
+            limiter.check_username_global(&user),
+        );
+
+        if global_hit? {
             return err(429, "Too many requests. Slow down.", Some((0, 60)));
         }
 
-        if limiter.check_username_global(&user).await? {
+        if username_hit? {
             return err(429, "Too many requests for this user. Try again in a minute.", Some((0, 60)));
         }
 
@@ -106,10 +111,10 @@ async fn handle_stats(req: Request, env: Env) -> Result<Response> {
             worker::console_log!("GitHub error: {:?}", e);
             let msg = e.to_string();
             let code = if msg.contains("rate limit") { 503 } else { 502 };
-            let display_msg = if code == 503 { 
-                "GitHub API rate limit exceeded" 
-            } else { 
-                "Failed to fetch data from GitHub" 
+            let display_msg = if code == 503 {
+                "GitHub API rate limit exceeded"
+            } else {
+                "Failed to fetch data from GitHub"
             };
             return err(code, display_msg, None);
         }

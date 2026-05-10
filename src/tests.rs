@@ -176,4 +176,19 @@ mod processor_tests {
         let (_, stars, _, _) = process_repos(&repos, &[], &[]);
         assert_eq!(stars, u32::MAX);
     }
+
+    #[test]
+    fn empty_repos_dont_dilute_language_percentages() {
+        let repos = vec![
+            make_repo("repo-a", 0, vec![("Rust", 1000)]),
+            make_repo("repo-b", 0, vec![]),
+        ];
+        let (_, _, langs, _) = process_repos(&repos, &[], &[]);
+        let rust = langs.iter().find(|(n, _)| n == "Rust").unwrap();
+        assert!(
+            (rust.1 - 1.0).abs() < 0.01,
+            "Rust should be 100%, got {}",
+            rust.1
+        );
+    }
 }

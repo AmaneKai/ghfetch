@@ -13,6 +13,7 @@ pub fn process_repos<'a>(
     let mut lang_shares: HashMap<&'a str, f64> = HashMap::new();
     let mut total_stars: u32 = 0;
     let mut top: Option<(&'a str, u32, &'a str)> = None;
+    let mut repos_with_langs: u32 = 0;
 
     for r in private.iter().chain(public.iter()).chain(contributed.iter()) {
         if !seen.insert(r.name.as_str()) {
@@ -33,6 +34,8 @@ pub fn process_repos<'a>(
             continue;
         }
 
+        repos_with_langs += 1;
+
         for e in &r.languages.edges {
             let share = e.size as f64 / total_repo_bytes as f64;
             *lang_shares.entry(e.node.name.as_str()).or_insert(0.0) += share;
@@ -40,12 +43,12 @@ pub fn process_repos<'a>(
     }
 
     let cnt = seen.len() as u32;
-    let repo_count = seen.len() as f64;
 
-    let mut langs: Vec<(String, f64)> = if repo_count > 0.0 {
+    let mut langs: Vec<(String, f64)> = if repos_with_langs > 0 {
+        let denom = repos_with_langs as f64;
         lang_shares
             .into_iter()
-            .map(|(name, total_share)| (name.to_string(), total_share / repo_count))
+            .map(|(name, total_share)| (name.to_string(), total_share / denom))
             .collect()
     } else {
         Vec::new()
@@ -74,10 +77,10 @@ pub fn build_stats(
         .into_iter()
         .filter_map(|(name, avg_share)| {
             let pct = (avg_share * 100.0).round() as u32;
-            if pct > 0 { 
-                Some(GitHubLanguage { name, percentage: pct }) 
-            } else { 
-                None 
+            if pct > 0 {
+                Some(GitHubLanguage { name, percentage: pct })
+            } else {
+                None
             }
         })
         .collect();
