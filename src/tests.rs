@@ -99,15 +99,17 @@ mod processor_tests {
             make_repo("repo-a", 5, vec![]),
             make_repo("repo-b", 3, vec![]),
         ];
-        let (cnt, _, _, _) = process_repos(&repos, &[], &[]);
+        let (cnt, _, _, _) = process_repos(repos.into_iter());
         assert_eq!(cnt, 2);
     }
 
     #[test]
     fn deduplicates_repos_by_name() {
-        let private = vec![make_repo("repo-a", 5, vec![])];
-        let public = vec![make_repo("repo-a", 5, vec![])];
-        let (cnt, _, _, _) = process_repos(&private, &public, &[]);
+        let all = vec![
+            make_repo("repo-a", 5, vec![]),
+            make_repo("repo-a", 5, vec![]),
+        ];
+        let (cnt, _, _, _) = process_repos(all.into_iter());
         assert_eq!(cnt, 1);
     }
 
@@ -117,7 +119,7 @@ mod processor_tests {
             make_repo("repo-a", 10, vec![]),
             make_repo("repo-b", 20, vec![]),
         ];
-        let (_, stars, _, _) = process_repos(&repos, &[], &[]);
+        let (_, stars, _, _) = process_repos(repos.into_iter());
         assert_eq!(stars, 30);
     }
 
@@ -128,7 +130,7 @@ mod processor_tests {
             make_repo("high", 99, vec![]),
             make_repo("mid", 50, vec![]),
         ];
-        let (_, _, _, top) = process_repos(&repos, &[], &[]);
+        let (_, _, _, top) = process_repos(repos.into_iter());
         assert_eq!(top.unwrap().name, "high");
     }
 
@@ -136,12 +138,12 @@ mod processor_tests {
     fn averages_language_shares_across_repos() {
         // repo-a: Rust=1000/1500≈0.667, C=500/1500≈0.333
         // repo-b: Rust=500/500=1.0
-        // avg over 2: Rust≈0.833, C≈0.167
+        // avg over 2 repos-with-langs: Rust≈0.833, C≈0.167
         let repos = vec![
             make_repo("repo-a", 0, vec![("Rust", 1000), ("C", 500)]),
             make_repo("repo-b", 0, vec![("Rust", 500)]),
         ];
-        let (_, _, langs, _) = process_repos(&repos, &[], &[]);
+        let (_, _, langs, _) = process_repos(repos.into_iter());
         let rust = langs.iter().find(|(n, _)| n == "Rust").unwrap();
         let c = langs.iter().find(|(n, _)| n == "C").unwrap();
         assert!((rust.1 - 0.833).abs() < 0.01, "Rust avg share should be ~0.833, got {}", rust.1);
@@ -155,7 +157,7 @@ mod processor_tests {
             0,
             vec![("C", 100), ("Rust", 900), ("Python", 500)],
         )];
-        let (_, _, langs, _) = process_repos(&repos, &[], &[]);
+        let (_, _, langs, _) = process_repos(repos.into_iter());
         assert_eq!(langs[0].0, "Rust");
         assert_eq!(langs[1].0, "Python");
         assert_eq!(langs[2].0, "C");
@@ -163,7 +165,7 @@ mod processor_tests {
 
     #[test]
     fn handles_empty_repos() {
-        let (cnt, stars, langs, top) = process_repos(&[], &[], &[]);
+        let (cnt, stars, langs, top) = process_repos(std::iter::empty());
         assert_eq!(cnt, 0);
         assert_eq!(stars, 0);
         assert!(langs.is_empty());
@@ -176,7 +178,20 @@ mod processor_tests {
             make_repo("a", u32::MAX, vec![]),
             make_repo("b", u32::MAX, vec![]),
         ];
-        let (_, stars, _, _) = process_repos(&repos, &[], &[]);
+        let (_, stars, _, _) = process_repos(repos.into_iter());
         assert_eq!(stars, u32::MAX); // saturating_add
+    }
+
+    #[test]
+    fn empty_repos_dont_dilute_language_percentages() {
+        // repo-a has Rust=100%, repo-b has no languages.
+        // Denominator should be 1 (only repos_with_langs), not 2.
+        let repos = vec![
+            make_repo("repo-a", 0, vec![("Rust", 1000)]),
+            make_repo("repo-b", 0, vec![]),
+        ];
+        let (_, _, langs, _) = process_repos(repos.into_iter());
+        let rust = langs.iter().find(|(n, _)| n == "Rust").unwrap();
+        assert!((rust.1 - 1.0).abs() < 0.01, "Rust should be 100% when only repo with langs, got {}", rust.1);
     }
 }

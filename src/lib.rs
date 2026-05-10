@@ -14,6 +14,8 @@ use processor::{build_stats, process_repos};
 use response::{cors_preflight, err, health, success};
 use shared::github::GitHubStats;
 
+use crate::processor::StatsInput;
+
 const CACHE_TTL: u64 = 300; // 5 minutes
 const VERSION: &str = "1.0.0";
 
@@ -21,11 +23,11 @@ const VERSION: &str = "1.0.0";
 pub async fn main(
     req: worker::Request,
     env: worker::Env,
-    _ctx: worker::Context,
+    ctx: worker::Context,
 ) -> Result<worker::Response, worker::Error> {
     if req.method() == worker::Method::Options {
         return cors_preflight();
-    }
+}
 
     if req.method() != worker::Method::Get {
         return err(405, "Method not allowed", None);
@@ -76,13 +78,27 @@ pub async fn main(
     // Rate limiting
     let (remaining, reset) = if let Some(ref kv_store) = kv {
         let limiter = Limiter::new(kv_store);
+        let cache_key = format!("cache:{}", user.as_str());
 
-        if limiter.check_global(&client).await? {
+        let (global_hit, username_hit, cached) = futures::join!(
+            limiter.check_global(&client),
+            limiter.check_username_global(&user),
+            kv_store.get(&cache_key).text(),
+        );
+
+        if global_hit? {
             return err(429, "Too many requests. Slow down.", Some((0, 60)));
         }
 
-        if limiter.check_username_global(&user).await? {
+        if username_hit? {
             return err(429, "Too many requests for this user. Try again in a minute.", Some((0, 60)));
+        }
+
+        if let Ok(Some(cached_str)) = cached {
+            if let Ok(stats) = serde_json::from_str::<GitHubStats>(&cached_str) {
+                worker::console_log!("Cache hit for {}", user.as_str());
+                return success(stats, 10, 60, true);
+            }
         }
 
         let cfg = RateConfig::default();
@@ -121,31 +137,59 @@ pub async fn main(
         None => return err(404, "User not found", None),
     };
 
-    let contributed: Vec<_> = gql_user
-        .contributions_collection
+    let crate::types::GqlUser {
+        avatar_url,
+        name,
+        bio,
+        created_at,
+        followers,
+        following,
+        mut contributions_collection,
+        repositories,
+        public_repositories,
+    } = gql_user;
+
+    let contributed: Vec<_> = contributions_collection
         .commit_contributions_by_repository
-        .iter()
-        .map(|c| c.repository.clone())
+        .drain(..)
+        .map(|c| c.repository)
         .collect();
 
-    let (repo_cnt, stars, langs, top) = process_repos(
-        &gql_user.repositories.nodes,
-        &gql_user.public_repositories.nodes,
-        &contributed,
-    );
+    let all_repos = repositories.nodes.into_iter()
+        .chain(public_repositories.nodes)
+        .chain(contributed);
 
-    let stats = build_stats(gql_user, user.as_str(), repo_cnt, stars, langs, top);
+    let (repo_cnt, stars, langs, top) = process_repos(all_repos);
+
+    let stats = build_stats(StatsInput {
+            username: user.as_str().to_string(), 
+            avatar_url, 
+            name, 
+            bio, 
+            created_at, 
+            followers, 
+            following, 
+            contributions: contributions_collection, 
+            repo_cnt, 
+            total_stars: stars, 
+            langs, 
+            top_repo: top, 
+        }
+    );
 
     // Store in cache
     if let Some(ref kv_store) = kv {
         if let Ok(json) = serde_json::to_string(&stats) {
             let cache_key = format!("cache:{}", user.as_str());
-            let _ = kv_store
+            let put_future = kv_store
                 .put(&cache_key, &json)?
                 .expiration_ttl(CACHE_TTL)
-                .execute()
-                .await;
-            worker::console_log!("Cached stats for {}", user.as_str());
+                .execute();
+
+            ctx.wait_until(async move {
+                let _ = put_future.await;
+                worker::console_log!("Cached stats for {}", cache_key);
+            });
         }
     }
 
