@@ -18,7 +18,7 @@ const CACHE_TTL: u64 = 300; // 5 minutes
 const VERSION: &str = "1.0.0";
 
 #[event(fetch)]
-pub async fn main(req: Request, env: Env, _ctx: worker::Context) -> Result<Response> {
+pub async fn main(req: Request, env: Env, ctx: worker::Context) -> Result<Response> {
     if req.method() == worker::Method::Options {
         return cors_preflight();
     }
@@ -35,13 +35,13 @@ pub async fn main(req: Request, env: Env, _ctx: worker::Context) -> Result<Respo
     }
 
     if path == "/v1/stats" {
-        return handle_stats(req, env).await;
+        return handle_stats(req, env, ctx).await;
     }
 
     err(404, "Not found", None)
 }
 
-async fn handle_stats(req: Request, env: Env) -> Result<Response> {
+async fn handle_stats(req: Request, env: Env, ctx: worker::Context) -> Result<Response> {
     let url = req.url()?;
     let raw = url
         .query_pairs()
@@ -54,15 +54,35 @@ async fn handle_stats(req: Request, env: Env) -> Result<Response> {
         None => return err(400, "Invalid username format", None),
     };
 
+    let cache_key_url = url.to_string();
+    let edge_cache = worker::Cache::default();
+
+    // Hit nearest PoP. Bypasses Rust execution & global KV completely on hits.
+    if let Ok(Some(cached_resp)) = edge_cache.get(&cache_key_url, false).await {
+        worker::console_log!("Edge cache hit for {}", user.as_str());
+        return Ok(cached_resp);
+    }
+
     let kv = env.kv("RATE_LIMIT_KV").ok();
 
-    // 1. FAST PATH: Cache check first, skip rate limiting entirely on hit
+    // 2. FAST PATH: Global KV Cache check
     if let Some(ref kv_store) = kv {
-        let cache_key = format!("cache:{}", user.as_str());
-        if let Ok(Some(cached)) = kv_store.get(&cache_key).text().await {
+        let kv_cache_key = format!("cache:{}", user.as_str());
+        if let Ok(Some(cached)) = kv_store.get(&kv_cache_key).text().await {
             if let Ok(stats) = serde_json::from_str::<GitHubStats>(&cached) {
-                worker::console_log!("Cache hit for {}", user.as_str());
-                return success(stats, 10, 60, true);
+                worker::console_log!("KV cache hit for {}", user.as_str());
+                let resp = success(stats.clone(), 10, 60, true)?;
+
+                // Background task: Promote this KV hit to the local Edge Cache
+                let cache_url = cache_key_url.clone();
+                ctx.wait_until(async move {
+                    let cache = worker::Cache::default();
+                    if let Ok(cache_resp) = success(stats, 10, 60, true) {
+                        let _ = cache.put(cache_url, cache_resp).await;
+                    }
+                });
+
+                return Ok(resp);
             }
         }
     }
@@ -78,7 +98,7 @@ async fn handle_stats(req: Request, env: Env) -> Result<Response> {
 
     let client = ClientId::from_req(&req);
 
-    // 2. SLOW PATH: Rate limiting only if we're actually going to hit GitHub
+    // 3. SLOW PATH: Rate limiting only if we're actually going to hit GitHub
     let (remaining, reset) = if let Some(ref kv_store) = kv {
         let limiter = Limiter::new(kv_store);
 
@@ -140,18 +160,31 @@ async fn handle_stats(req: Request, env: Env) -> Result<Response> {
 
     let stats = build_stats(gql_user, user.as_str(), repo_cnt, stars, langs, top);
 
-    // Store in cache
-    if let Some(ref kv_store) = kv {
-        if let Ok(json) = serde_json::to_string(&stats) {
-            let cache_key = format!("cache:{}", user.as_str());
-            let _ = kv_store
-                .put(&cache_key, &json)?
-                .expiration_ttl(CACHE_TTL)
-                .execute()
-                .await;
-            worker::console_log!("Cached stats for {}", user.as_str());
-        }
-    }
+    // Create the immediate user response (Instant response over HTTP to the client)
+    let resp = success(stats.clone(), remaining, reset, false)?;
 
-    success(stats, remaining, reset, false)
+    // Background tasks: Store in KV cache and Edge cache without blocking the HTTP response
+    let user_str = user.as_str().to_string();
+    let cache_url = cache_key_url;
+    
+    ctx.wait_until(async move {
+        // 1. Edge Cache Background Save
+        let cache = worker::Cache::default();
+        if let Ok(cache_resp) = success(stats.clone(), remaining, reset, false) {
+            let _ = cache.put(cache_url, cache_resp).await;
+        }
+
+        // 2. Global KV Cache Background Save
+        if let Ok(kv_bg) = env.kv("RATE_LIMIT_KV") {
+            if let Ok(json) = serde_json::to_string(&stats) {
+                let kv_key = format!("cache:{}", user_str);
+                if let Ok(builder) = kv_bg.put(&kv_key, &json) {
+                    let _ = builder.expiration_ttl(CACHE_TTL).execute().await;
+                    worker::console_log!("Cached stats for {}", user_str);
+                }
+            }
+        }
+    });
+
+    Ok(resp)
 }
