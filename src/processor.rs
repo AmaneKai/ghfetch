@@ -1,18 +1,18 @@
 use crate::types::{GqlUser, Repo};
 use shared::github::{GitHubLanguage, GitHubStats, MostStarredRepo};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::cmp::Ordering;
 
-pub fn process_repos<'a>(
-    private: &'a [Repo],
-    public: &'a [Repo],
-    contributed: &'a [Repo],
+pub fn process_repos(
+    private: &[Repo],
+    public: &[Repo],
+    contributed: &[Repo],
 ) -> (u32, u32, Vec<(String, f64)>, Option<MostStarredRepo>) {
 
-    let mut seen = HashSet::new();
-    let mut lang_shares: HashMap<&'a str, f64> = HashMap::new();
+    let mut seen: BTreeSet<&str> = BTreeSet::new();
+    let mut lang_shares: BTreeMap<String, f64> = BTreeMap::new();
     let mut total_stars: u32 = 0;
-    let mut top: Option<(&'a str, u32, &'a str)> = None;
+    let mut top: Option<(&str, u32, &str)> = None;
     let mut repos_with_langs: u32 = 0;
 
     for r in private.iter().chain(public.iter()).chain(contributed.iter()) {
@@ -23,13 +23,11 @@ pub fn process_repos<'a>(
         total_stars = total_stars.saturating_add(r.stargazer_count);
 
         let best = top.as_ref().map(|(_, s, _)| *s).unwrap_or(0);
-
         if r.stargazer_count > best {
             top = Some((r.name.as_str(), r.stargazer_count, r.url.as_str()));
         }
 
         let total_repo_bytes: u64 = r.languages.edges.iter().map(|e| e.size).sum();
-
         if total_repo_bytes == 0 {
             continue;
         }
@@ -38,7 +36,7 @@ pub fn process_repos<'a>(
 
         for e in &r.languages.edges {
             let share = e.size as f64 / total_repo_bytes as f64;
-            *lang_shares.entry(e.node.name.as_str()).or_insert(0.0) += share;
+            *lang_shares.entry(e.node.name.clone()).or_insert(0.0) += share;
         }
     }
 
@@ -48,7 +46,7 @@ pub fn process_repos<'a>(
         let denom = repos_with_langs as f64;
         lang_shares
             .into_iter()
-            .map(|(name, total_share)| (name.to_string(), total_share / denom))
+            .map(|(name, total_share)| (name, total_share / denom))
             .collect()
     } else {
         Vec::new()

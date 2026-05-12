@@ -8,7 +8,7 @@ mod response;
 mod tests;
 
 use types::{ClientId, RateConfig, Username};
-use rate_limit::Limiter;
+use rate_limit::{flush_global_writes, flush_rate_writes, Limiter};
 use github::GitHubClient;
 use processor::{build_stats, process_repos};
 use response::{cors_preflight, err, health, success};
@@ -57,7 +57,6 @@ async fn handle_stats(req: Request, env: Env, ctx: worker::Context) -> Result<Re
     let cache_key_url = url.to_string();
     let edge_cache = worker::Cache::default();
 
-    // Hit nearest PoP. Bypasses Rust execution & global KV completely on hits.
     if let Ok(Some(cached_resp)) = edge_cache.get(&cache_key_url, false).await {
         worker::console_log!("Edge cache hit for {}", user.as_str());
         return Ok(cached_resp);
@@ -65,7 +64,6 @@ async fn handle_stats(req: Request, env: Env, ctx: worker::Context) -> Result<Re
 
     let kv = env.kv("RATE_LIMIT_KV").ok();
 
-    // 2. FAST PATH: Global KV Cache check
     if let Some(ref kv_store) = kv {
         let kv_cache_key = format!("cache:{}", user.as_str());
         if let Ok(Some(cached)) = kv_store.get(&kv_cache_key).text().await {
@@ -73,7 +71,6 @@ async fn handle_stats(req: Request, env: Env, ctx: worker::Context) -> Result<Re
                 worker::console_log!("KV cache hit for {}", user.as_str());
                 let resp = success(stats.clone(), 10, 60, true)?;
 
-                // Background task: Promote this KV hit to the local Edge Cache
                 let cache_url = cache_key_url.clone();
                 ctx.wait_until(async move {
                     let cache = worker::Cache::default();
@@ -98,26 +95,44 @@ async fn handle_stats(req: Request, env: Env, ctx: worker::Context) -> Result<Re
 
     let client = ClientId::from_req(&req);
 
-    // 3. SLOW PATH: Rate limiting only if we're actually going to hit GitHub
     let (remaining, reset) = if let Some(ref kv_store) = kv {
         let limiter = Limiter::new(kv_store);
 
-        let (global_hit, username_hit) = futures::join!(
-            limiter.check_global(&client),
-            limiter.check_username_global(&user),
-        );
+        let global_result = limiter.check_globals(&client, &user).await?;
 
-        if global_hit? {
-            return err(429, "Too many requests. Slow down.", Some((0, 60)));
+        let global_ip_blocked = global_result.global_ip_blocked;
+        let username_blocked = global_result.username_blocked;
+
+        if let Ok(kv_bg) = env.kv("RATE_LIMIT_KV") {
+            ctx.wait_until(async move {
+                flush_global_writes(&kv_bg, global_result).await;
+            });
         }
 
-        if username_hit? {
+        if global_ip_blocked {
+            return err(429, "Too many requests. Slow down.", Some((0, 60)));
+        }
+        if username_blocked {
             return err(429, "Too many requests for this user. Try again in a minute.", Some((0, 60)));
         }
 
         let cfg = RateConfig::default();
         match limiter.check_with_info(&client, &user, cfg).await? {
-            Some(info) => info,
+            Some(((remaining, reset), writes)) => {
+                let is_blocked = writes.block_key.is_some();
+
+                if let Ok(kv_bg) = env.kv("RATE_LIMIT_KV") {
+                    ctx.wait_until(async move {
+                        flush_rate_writes(&kv_bg, writes).await;
+                    });
+                }
+
+                if is_blocked {
+                    return err(429, "Rate limit exceeded. Try again in 5 minutes.", Some((0, 300)));
+                }
+
+                (remaining, reset)
+            }
             None => return err(429, "Rate limit exceeded. Try again in 5 minutes.", Some((0, 300))),
         }
     } else {
@@ -160,21 +175,17 @@ async fn handle_stats(req: Request, env: Env, ctx: worker::Context) -> Result<Re
 
     let stats = build_stats(gql_user, user.as_str(), repo_cnt, stars, langs, top);
 
-    // Create the immediate user response (Instant response over HTTP to the client)
     let resp = success(stats.clone(), remaining, reset, false)?;
 
-    // Background tasks: Store in KV cache and Edge cache without blocking the HTTP response
     let user_str = user.as_str().to_string();
     let cache_url = cache_key_url;
-    
+
     ctx.wait_until(async move {
-        // 1. Edge Cache Background Save
         let cache = worker::Cache::default();
         if let Ok(cache_resp) = success(stats.clone(), remaining, reset, false) {
             let _ = cache.put(cache_url, cache_resp).await;
         }
 
-        // 2. Global KV Cache Background Save
         if let Ok(kv_bg) = env.kv("RATE_LIMIT_KV") {
             if let Ok(json) = serde_json::to_string(&stats) {
                 let kv_key = format!("cache:{}", user_str);

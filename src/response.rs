@@ -1,7 +1,40 @@
 use serde::Serialize;
 use worker::Response;
 
-pub fn json<T: Serialize>(
+#[derive(Serialize)]
+struct OkEnvelope<T: Serialize> {
+    ok: bool,
+    data: T,
+}
+
+#[derive(Serialize)]
+struct ErrEnvelope<'a> {
+    ok: bool,
+    error: &'a str,
+}
+
+#[derive(Serialize)]
+struct HealthBody<'a> {
+    status: &'a str,
+    version: &'a str,
+}
+
+#[derive(Serialize)]
+struct EndpointMap<'a> {
+    stats: &'a str,
+    health: &'a str,
+}
+
+#[derive(Serialize)]
+struct RootBody<'a> {
+    name: &'a str,
+    version: &'a str,
+    description: &'a str,
+    endpoints: EndpointMap<'a>,
+    source: &'a str,
+}
+
+fn json<T: Serialize>(
     data: &T,
     status: u16,
     extra_headers: Option<Vec<(&str, String)>>,
@@ -26,7 +59,6 @@ pub fn json<T: Serialize>(
     h.set("Vary", "Accept-Encoding")?;
     h.set("Content-Type", "application/json")?;
 
-    // Extra headers (rate limit info etc)
     if let Some(headers) = extra_headers {
         for (k, v) in headers {
             h.set(k, &v)?;
@@ -47,11 +79,7 @@ pub fn success<T: Serialize>(
         ("X-RateLimit-Reset", reset.to_string()),
         ("X-Cache", if cached { "HIT".to_string() } else { "MISS".to_string() }),
     ];
-    json(
-        &serde_json::json!({ "ok": true, "data": data }),
-        200,
-        Some(headers),
-    )
+    json(&OkEnvelope { ok: true, data }, 200, Some(headers))
 }
 
 pub fn err(
@@ -59,46 +87,36 @@ pub fn err(
     msg: &str,
     rate_info: Option<(u32, u64)>,
 ) -> Result<Response, worker::Error> {
-    let mut headers = rate_info.map(|(remaining, reset)| {
-        vec![
-            ("X-RateLimit-Remaining", remaining.to_string()),
-            ("X-RateLimit-Reset", reset.to_string()),
-        ]
-    }).unwrap_or_default();
-    
-    // Do not cache error responses
+    let mut headers = rate_info
+        .map(|(remaining, reset)| {
+            vec![
+                ("X-RateLimit-Remaining", remaining.to_string()),
+                ("X-RateLimit-Reset", reset.to_string()),
+            ]
+        })
+        .unwrap_or_default();
+
     headers.push(("Cache-Control", "no-store, no-cache, must-revalidate".to_string()));
 
-    json(
-        &serde_json::json!({ "ok": false, "error": msg }),
-        status,
-        Some(headers),
-    )
+    json(&ErrEnvelope { ok: false, error: msg }, status, Some(headers))
 }
 
 pub fn health(version: &str) -> Result<Response, worker::Error> {
-    json(
-        &serde_json::json!({
-            "status": "ok",
-            "version": version
-        }),
-        200,
-        None,
-    )
+    json(&HealthBody { status: "ok", version }, 200, None)
 }
 
 pub fn root(version: &str) -> Result<Response, worker::Error> {
     json(
-        &serde_json::json!({
-            "name": "ghfetch",
-            "version": version,
-            "description": "GitHub stats API built with Rust on Cloudflare Workers",
-            "endpoints": {
-                "stats": "/v1/stats?username=<github-username>",
-                "health": "/health"
+        &RootBody {
+            name: "ghfetch",
+            version,
+            description: "GitHub stats API built with Rust on Cloudflare Workers",
+            endpoints: EndpointMap {
+                stats: "/v1/stats?username=<github-username>",
+                health: "/health",
             },
-            "source": "https://github.com/AmaneKai/ghfetch"
-        }),
+            source: "https://github.com/AmaneKai/ghfetch",
+        },
         200,
         None,
     )
