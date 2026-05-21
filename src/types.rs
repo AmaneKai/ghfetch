@@ -117,10 +117,16 @@ pub struct RepoConn {
 #[derive(Deserialize, Clone)]
 pub struct Repo {
     pub name: String,
+    pub owner: Owner,
     #[serde(rename = "stargazerCount")]
     pub stargazer_count: u32,
     pub url: String,
     pub languages: LangConn,
+}
+
+#[derive(Deserialize, Clone)]
+pub struct Owner {
+    pub login: String,
 }
 
 #[derive(Deserialize, Clone)]

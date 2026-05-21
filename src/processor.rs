@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::cmp::Ordering;
 
 pub fn process_repos(
+    target_user: &str,
     private: &[Repo],
     public: &[Repo],
     contributed: &[Repo],
@@ -23,7 +24,7 @@ pub fn process_repos(
         total_stars = total_stars.saturating_add(r.stargazer_count);
 
         let best = top.as_ref().map(|(_, s, _)| *s).unwrap_or(0);
-        if r.stargazer_count > best {
+        if r.owner.login.eq_ignore_ascii_case(target_user) && r.stargazer_count > best {
             top = Some((r.name.as_str(), r.stargazer_count, r.url.as_str()));
         }
 

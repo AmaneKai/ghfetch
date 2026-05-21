@@ -168,6 +168,7 @@ async fn handle_stats(req: Request, env: Env, ctx: worker::Context) -> Result<Re
         .collect();
 
     let (repo_cnt, stars, langs, top) = process_repos(
+        user.as_str(),
         &gql_user.repositories.nodes,
         &gql_user.public_repositories.nodes,
         &contributed,

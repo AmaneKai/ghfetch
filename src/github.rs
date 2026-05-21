@@ -16,6 +16,7 @@ query($u: String!) {
       commitContributionsByRepository(maxRepositories: 100) {
         repository {
           name stargazerCount url
+          owner { login }
           languages(first: 10, orderBy: {field: SIZE, direction: DESC}) {
             edges { size node { name } }
           }
@@ -29,6 +30,7 @@ query($u: String!) {
         privacy: PRIVATE) {
       nodes {
         name stargazerCount url
+        owner { login }
         languages(first: 10, orderBy: {field: SIZE, direction: DESC}) {
           edges { size node { name } }
         }
@@ -41,6 +43,7 @@ query($u: String!) {
         privacy: PUBLIC) {
       nodes {
         name stargazerCount url
+        owner { login }
         languages(first: 10, orderBy: {field: SIZE, direction: DESC}) {
           edges { size node { name } }
         }

@@ -176,9 +176,7 @@ pub async fn flush_rate_writes(kv: &KvStore, writes: PendingWrites) {
                 let _ = b.expiration_ttl(block_ttl).execute().await;
             }
         }
-    } else {
-        if let Ok(b) = kv.put(&writes.key, &writes.count_value) {
-            let _ = b.expiration_ttl(writes.count_ttl).execute().await;
-        }
+    } else if let Ok(b) = kv.put(&writes.key, &writes.count_value) {
+        let _ = b.expiration_ttl(writes.count_ttl).execute().await;
     }
 }
