@@ -1,23 +1,57 @@
 use crate::types::{GqlUser, Repo};
-use shared::github::{GitHubLanguage, GitHubStats, MostStarredRepo};
+use shared::github::{GitHubLanguage, GitHubStats, MostStarredRepo, InvolvedRepo};
 use std::collections::{BTreeMap, BTreeSet};
 use std::cmp::Ordering;
+
+pub struct ProcessedRepos {
+    pub repo_count: u32,
+    pub total_stars: u32,
+    pub languages: Vec<(String, f64)>,
+    pub most_starred_repo: Option<MostStarredRepo>,
+    pub involved_repos: Vec<InvolvedRepo>,
+}
 
 pub fn process_repos(
     target_user: &str,
     private: &[Repo],
     public: &[Repo],
-    contributed: &[Repo],
-) -> (u32, u32, Vec<(String, f64)>, Option<MostStarredRepo>) {
-
-    let mut seen: BTreeSet<&str> = BTreeSet::new();
+    contributed: &[(Repo, Option<String>)],
+) -> ProcessedRepos {
+    let mut seen: BTreeSet<String> = BTreeSet::new();
     let mut lang_shares: BTreeMap<String, f64> = BTreeMap::new();
     let mut total_stars: u32 = 0;
     let mut top: Option<(&str, u32, &str)> = None;
     let mut repos_with_langs: u32 = 0;
 
-    for r in private.iter().chain(public.iter()).chain(contributed.iter()) {
-        if !seen.insert(r.name.as_str()) {
+    let mut involved_map: BTreeMap<String, InvolvedRepo> = BTreeMap::new();
+
+    let mut add_involved = |r: &Repo, date: String| {
+        let key = format!("{}/{}", r.owner.login.to_lowercase(), r.name.to_lowercase());
+        let primary_lang = r.languages.edges.first().map(|e| e.node.name.clone());
+
+        let new_item = InvolvedRepo {
+            name: r.name.clone(),
+            owner: r.owner.login.clone(),
+            url: r.url.clone(),
+            last_contributed_at: date,
+            stars: r.stargazer_count,
+            primary_language: primary_lang,
+        };
+
+        involved_map
+            .entry(key)
+            .and_modify(|existing| {
+                if new_item.last_contributed_at > existing.last_contributed_at {
+                    existing.last_contributed_at = new_item.last_contributed_at.clone();
+                }
+            })
+            .or_insert(new_item);
+    };
+
+    // 1. Process private repos
+    for r in private {
+        let key_name = r.name.to_lowercase();
+        if !seen.insert(key_name) {
             continue;
         }
 
@@ -29,15 +63,71 @@ pub fn process_repos(
         }
 
         let total_repo_bytes: u64 = r.languages.edges.iter().map(|e| e.size).sum();
-        if total_repo_bytes == 0 {
+        if total_repo_bytes > 0 {
+            repos_with_langs += 1;
+            for e in &r.languages.edges {
+                let share = e.size as f64 / total_repo_bytes as f64;
+                *lang_shares.entry(e.node.name.clone()).or_insert(0.0) += share;
+            }
+        }
+
+        if let Some(ref date) = r.pushed_at {
+            add_involved(r, date.clone());
+        }
+    }
+
+    // 2. Process public repos
+    for r in public {
+        let key_name = r.name.to_lowercase();
+        if !seen.insert(key_name) {
             continue;
         }
 
-        repos_with_langs += 1;
+        total_stars = total_stars.saturating_add(r.stargazer_count);
 
-        for e in &r.languages.edges {
-            let share = e.size as f64 / total_repo_bytes as f64;
-            *lang_shares.entry(e.node.name.clone()).or_insert(0.0) += share;
+        let best = top.as_ref().map(|(_, s, _)| *s).unwrap_or(0);
+        if r.owner.login.eq_ignore_ascii_case(target_user) && r.stargazer_count > best {
+            top = Some((r.name.as_str(), r.stargazer_count, r.url.as_str()));
+        }
+
+        let total_repo_bytes: u64 = r.languages.edges.iter().map(|e| e.size).sum();
+        if total_repo_bytes > 0 {
+            repos_with_langs += 1;
+            for e in &r.languages.edges {
+                let share = e.size as f64 / total_repo_bytes as f64;
+                *lang_shares.entry(e.node.name.clone()).or_insert(0.0) += share;
+            }
+        }
+
+        if let Some(ref date) = r.pushed_at {
+            add_involved(r, date.clone());
+        }
+    }
+
+    // 3. Process contributed repos
+    for (r, occurred_at) in contributed {
+        let key_name = r.name.to_lowercase();
+        if seen.insert(key_name) {
+            total_stars = total_stars.saturating_add(r.stargazer_count);
+
+            let best = top.as_ref().map(|(_, s, _)| *s).unwrap_or(0);
+            if r.owner.login.eq_ignore_ascii_case(target_user) && r.stargazer_count > best {
+                top = Some((r.name.as_str(), r.stargazer_count, r.url.as_str()));
+            }
+
+            let total_repo_bytes: u64 = r.languages.edges.iter().map(|e| e.size).sum();
+            if total_repo_bytes > 0 {
+                repos_with_langs += 1;
+                for e in &r.languages.edges {
+                    let share = e.size as f64 / total_repo_bytes as f64;
+                    *lang_shares.entry(e.node.name.clone()).or_insert(0.0) += share;
+                }
+            }
+        }
+
+        let date = occurred_at.clone().or(r.pushed_at.clone()).unwrap_or_default();
+        if !date.is_empty() {
+            add_involved(r, date);
         }
     }
 
@@ -61,7 +151,17 @@ pub fn process_repos(
         url: u.to_string(),
     });
 
-    (cnt, total_stars, langs, most_starred)
+    let mut involved_repos: Vec<InvolvedRepo> = involved_map.into_values().collect();
+    involved_repos.sort_by(|a, b| b.last_contributed_at.cmp(&a.last_contributed_at));
+    involved_repos.truncate(15);
+
+    ProcessedRepos {
+        repo_count: cnt,
+        total_stars,
+        languages: langs,
+        most_starred_repo: most_starred,
+        involved_repos,
+    }
 }
 
 pub fn build_stats(
@@ -71,6 +171,7 @@ pub fn build_stats(
     total_stars: u32,
     langs: Vec<(String, f64)>,
     top_repo: Option<MostStarredRepo>,
+    involved_repos: Vec<InvolvedRepo>,
 ) -> GitHubStats {
     let languages: Vec<GitHubLanguage> = langs
         .into_iter()
@@ -103,5 +204,6 @@ pub fn build_stats(
         display_name: user.name.unwrap_or_else(|| username.to_string()),
         bio: user.bio.unwrap_or_default(),
         languages,
+        involved_repos,
     }
 }

@@ -98,9 +98,22 @@ pub struct ContribColl {
     pub commit_contributions_by_repository: Vec<CommitContribByRepo>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 pub struct CommitContribByRepo {
     pub repository: Repo,
+    #[serde(default)]
+    pub contributions: Option<ContribConn>,
+}
+
+#[derive(Deserialize, Clone)]
+pub struct ContribConn {
+    pub nodes: Vec<ContribNode>,
+}
+
+#[derive(Deserialize, Clone)]
+pub struct ContribNode {
+    #[serde(rename = "occurredAt")]
+    pub occurred_at: String,
 }
 
 #[derive(Deserialize)]
@@ -122,6 +135,8 @@ pub struct Repo {
     pub stargazer_count: u32,
     pub url: String,
     pub languages: LangConn,
+    #[serde(rename = "pushedAt")]
+    pub pushed_at: Option<String>,
 }
 
 #[derive(Deserialize, Clone)]

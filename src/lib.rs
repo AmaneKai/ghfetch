@@ -164,17 +164,32 @@ async fn handle_stats(req: Request, env: Env, ctx: worker::Context) -> Result<Re
         .contributions_collection
         .commit_contributions_by_repository
         .iter()
-        .map(|c| c.repository.clone())
+        .map(|c| {
+            let occurred_at = c
+                .contributions
+                .as_ref()
+                .and_then(|conn| conn.nodes.first())
+                .map(|node| node.occurred_at.clone());
+            (c.repository.clone(), occurred_at)
+        })
         .collect();
 
-    let (repo_cnt, stars, langs, top) = process_repos(
+    let processed = process_repos(
         user.as_str(),
         &gql_user.repositories.nodes,
         &gql_user.public_repositories.nodes,
         &contributed,
     );
 
-    let stats = build_stats(gql_user, user.as_str(), repo_cnt, stars, langs, top);
+    let stats = build_stats(
+        gql_user,
+        user.as_str(),
+        processed.repo_count,
+        processed.total_stars,
+        processed.languages,
+        processed.most_starred_repo,
+        processed.involved_repos,
+    );
 
     let resp = success(stats.clone(), remaining, reset, false)?;
 

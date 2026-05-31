@@ -91,6 +91,7 @@ mod processor_tests {
                     })
                     .collect(),
             },
+            pushed_at: Some("2026-04-09T00:00:00Z".to_string()),
         }
     }
 
@@ -100,16 +101,16 @@ mod processor_tests {
             make_repo("repo-a", 5, "user", vec![]),
             make_repo("repo-b", 3, "user", vec![]),
         ];
-        let (cnt, _, _, _) = process_repos("user", &repos, &[], &[]);
-        assert_eq!(cnt, 2);
+        let processed = process_repos("user", &repos, &[], &[]);
+        assert_eq!(processed.repo_count, 2);
     }
 
     #[test]
     fn deduplicates_repos_by_name() {
         let private = vec![make_repo("repo-a", 5, "user", vec![])];
         let public = vec![make_repo("repo-a", 5, "user", vec![])];
-        let (cnt, _, _, _) = process_repos("user", &private, &public, &[]);
-        assert_eq!(cnt, 1);
+        let processed = process_repos("user", &private, &public, &[]);
+        assert_eq!(processed.repo_count, 1);
     }
 
     #[test]
@@ -118,8 +119,8 @@ mod processor_tests {
             make_repo("repo-a", 10, "user", vec![]),
             make_repo("repo-b", 20, "user", vec![]),
         ];
-        let (_, stars, _, _) = process_repos("user", &repos, &[], &[]);
-        assert_eq!(stars, 30);
+        let processed = process_repos("user", &repos, &[], &[]);
+        assert_eq!(processed.total_stars, 30);
     }
 
     #[test]
@@ -129,18 +130,18 @@ mod processor_tests {
             make_repo("high", 99, "user", vec![]),
             make_repo("mid", 50, "user", vec![]),
         ];
-        let (_, _, _, top) = process_repos("user", &repos, &[], &[]);
-        assert_eq!(top.unwrap().name, "high");
+        let processed = process_repos("user", &repos, &[], &[]);
+        assert_eq!(processed.most_starred_repo.unwrap().name, "high");
     }
 
     #[test]
     fn top_repo_must_be_owned() {
         let owned = vec![make_repo("owned", 10, "user", vec![])];
-        let contributed = vec![make_repo("other", 100, "someone-else", vec![])];
-        let (_, stars, _, top) = process_repos("user", &owned, &[], &contributed);
+        let contributed = vec![(make_repo("other", 100, "someone-else", vec![]), None)];
+        let processed = process_repos("user", &owned, &[], &contributed);
         
-        assert_eq!(stars, 110); // Still counts all stars
-        assert_eq!(top.unwrap().name, "owned"); // But top is the owned one
+        assert_eq!(processed.total_stars, 110);
+        assert_eq!(processed.most_starred_repo.unwrap().name, "owned");
     }
 
     #[test]
@@ -149,9 +150,9 @@ mod processor_tests {
             make_repo("repo-a", 0, "user", vec![("Rust", 1000), ("C", 500)]),
             make_repo("repo-b", 0, "user", vec![("Rust", 500)]),
         ];
-        let (_, _, langs, _) = process_repos("user", &repos, &[], &[]);
-        let rust = langs.iter().find(|(n, _)| n == "Rust").unwrap();
-        let c = langs.iter().find(|(n, _)| n == "C").unwrap();
+        let processed = process_repos("user", &repos, &[], &[]);
+        let rust = processed.languages.iter().find(|(n, _)| n == "Rust").unwrap();
+        let c = processed.languages.iter().find(|(n, _)| n == "C").unwrap();
         assert!((rust.1 - 0.833).abs() < 0.01, "Rust avg share should be ~0.833, got {}", rust.1);
         assert!((c.1 - 0.167).abs() < 0.01, "C avg share should be ~0.167, got {}", c.1);
     }
@@ -164,19 +165,20 @@ mod processor_tests {
             "user",
             vec![("C", 100), ("Rust", 900), ("Python", 500)],
         )];
-        let (_, _, langs, _) = process_repos("user", &repos, &[], &[]);
-        assert_eq!(langs[0].0, "Rust");
-        assert_eq!(langs[1].0, "Python");
-        assert_eq!(langs[2].0, "C");
+        let processed = process_repos("user", &repos, &[], &[]);
+        assert_eq!(processed.languages[0].0, "Rust");
+        assert_eq!(processed.languages[1].0, "Python");
+        assert_eq!(processed.languages[2].0, "C");
     }
 
     #[test]
     fn handles_empty_repos() {
-        let (cnt, stars, langs, top) = process_repos("user", &[], &[], &[]);
-        assert_eq!(cnt, 0);
-        assert_eq!(stars, 0);
-        assert!(langs.is_empty());
-        assert!(top.is_none());
+        let processed = process_repos("user", &[], &[], &[]);
+        assert_eq!(processed.repo_count, 0);
+        assert_eq!(processed.total_stars, 0);
+        assert!(processed.languages.is_empty());
+        assert!(processed.most_starred_repo.is_none());
+        assert!(processed.involved_repos.is_empty());
     }
 
     #[test]
@@ -185,8 +187,8 @@ mod processor_tests {
             make_repo("a", u32::MAX, "user", vec![]),
             make_repo("b", u32::MAX, "user", vec![]),
         ];
-        let (_, stars, _, _) = process_repos("user", &repos, &[], &[]);
-        assert_eq!(stars, u32::MAX);
+        let processed = process_repos("user", &repos, &[], &[]);
+        assert_eq!(processed.total_stars, u32::MAX);
     }
 
     #[test]
@@ -195,8 +197,8 @@ mod processor_tests {
             make_repo("repo-a", 0, "user", vec![("Rust", 1000)]),
             make_repo("repo-b", 0, "user", vec![]),
         ];
-        let (_, _, langs, _) = process_repos("user", &repos, &[], &[]);
-        let rust = langs.iter().find(|(n, _)| n == "Rust").unwrap();
+        let processed = process_repos("user", &repos, &[], &[]);
+        let rust = processed.languages.iter().find(|(n, _)| n == "Rust").unwrap();
         assert!(
             (rust.1 - 1.0).abs() < 0.01,
             "Rust should be 100%, got {}",

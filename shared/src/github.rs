@@ -24,6 +24,8 @@ pub struct GitHubStats {
     pub avatar_url: String,
     pub display_name: String,
     pub bio: String,
+    #[serde(default)]
+    pub involved_repos: Vec<InvolvedRepo>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Default)]
@@ -32,4 +34,15 @@ pub struct MostStarredRepo {
     pub name: String,
     pub stars: u32,
     pub url: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct InvolvedRepo {
+    pub name: String,
+    pub owner: String,
+    pub url: String,
+    pub last_contributed_at: String,
+    pub stars: u32,
+    pub primary_language: Option<String>,
 }
