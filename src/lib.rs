@@ -54,21 +54,47 @@ async fn handle_stats(req: Request, env: Env, ctx: worker::Context) -> Result<Re
         None => return err(400, "Invalid username format", None),
     };
 
-    let cache_key_url = url.to_string();
+    // --- Privacy Filter Logic ---
+    let headers = req.headers();
+    let origin_str = headers.get("Origin").unwrap_or(None).unwrap_or_default();
+    let referer_str = headers.get("Referer").unwrap_or(None).unwrap_or_default();
+
+    let portfolio_domain = env
+        .secret("PORTFOLIO_ORIGIN")
+        .map(|s| s.to_string())
+        .unwrap_or_else(|_| "carlosranara.com".to_string());
+
+    let is_portfolio_request = origin_str.contains(&portfolio_domain)
+        || referer_str.contains(&portfolio_domain)
+        || origin_str.contains("localhost")
+        || referer_str.contains("localhost");
+
+    // Partition Cache Keys based on request classification
+    let cache_key_url = if is_portfolio_request {
+        format!("{}&_private=1", url)
+    } else {
+        format!("{}&_private=0", url)
+    };
+
+    let kv_cache_key = if is_portfolio_request {
+        format!("cache:{}:private", user.as_str())
+    } else {
+        format!("cache:{}:public", user.as_str())
+    };
+
     let edge_cache = worker::Cache::default();
 
     if let Ok(Some(cached_resp)) = edge_cache.get(&cache_key_url, false).await {
-        worker::console_log!("Edge cache hit for {}", user.as_str());
+        worker::console_log!("Edge cache hit for {} (private_authorized: {})", user.as_str(), is_portfolio_request);
         return Ok(cached_resp);
     }
 
     let kv = env.kv("RATE_LIMIT_KV").ok();
 
     if let Some(ref kv_store) = kv {
-        let kv_cache_key = format!("cache:{}", user.as_str());
         if let Ok(Some(cached)) = kv_store.get(&kv_cache_key).text().await {
             if let Ok(stats) = serde_json::from_str::<GitHubStats>(&cached) {
-                worker::console_log!("KV cache hit for {}", user.as_str());
+                worker::console_log!("KV cache hit for {} (private_authorized: {})", user.as_str(), is_portfolio_request);
                 let resp = success(stats.clone(), 10, 60, true)?;
 
                 let cache_url = cache_key_url.clone();
@@ -160,21 +186,6 @@ async fn handle_stats(req: Request, env: Env, ctx: worker::Context) -> Result<Re
         None => return err(404, "User not found", None),
     };
 
-    // --- Privacy Filter Logic ---
-    let headers = req.headers();
-    let origin_str = headers.get("Origin").unwrap_or(None).unwrap_or_default();
-    let referer_str = headers.get("Referer").unwrap_or(None).unwrap_or_default();
-
-    let portfolio_domain = env
-        .secret("PORTFOLIO_ORIGIN")
-        .map(|s| s.to_string())
-        .unwrap_or_else(|_| "carlosranara.com".to_string());
-
-    let is_portfolio_request = origin_str.contains(&portfolio_domain)
-        || referer_str.contains(&portfolio_domain)
-        || origin_str.contains("localhost")
-        || referer_str.contains("localhost");
-
     let private_repos = if is_portfolio_request {
         std::mem::take(&mut gql_user.repositories.nodes)
     } else {
@@ -217,6 +228,7 @@ async fn handle_stats(req: Request, env: Env, ctx: worker::Context) -> Result<Re
 
     let user_str = user.as_str().to_string();
     let cache_url = cache_key_url;
+    let kv_key = kv_cache_key;
 
     ctx.wait_until(async move {
         let cache = worker::Cache::default();
@@ -226,7 +238,6 @@ async fn handle_stats(req: Request, env: Env, ctx: worker::Context) -> Result<Re
 
         if let Ok(kv_bg) = env.kv("RATE_LIMIT_KV") {
             if let Ok(json) = serde_json::to_string(&stats) {
-                let kv_key = format!("cache:{}", user_str);
                 if let Ok(builder) = kv_bg.put(&kv_key, &json) {
                     let _ = builder.expiration_ttl(CACHE_TTL).execute().await;
                     worker::console_log!("Cached stats for {}", user_str);
