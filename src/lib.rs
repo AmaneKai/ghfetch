@@ -66,8 +66,8 @@ async fn handle_stats(req: Request, env: Env, ctx: worker::Context) -> Result<Re
 
     let is_portfolio_request = origin_str.contains(&portfolio_domain)
         || referer_str.contains(&portfolio_domain)
-        || origin_str.contains("localhost")
-        || referer_str.contains("localhost");
+        || origin_str.contains("localhost:5173")
+        || referer_str.contains("localhost:5173");
 
     // Partition Cache Keys based on request classification
     let cache_key_url = if is_portfolio_request {
