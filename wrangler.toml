@@ -4,7 +4,7 @@ compatibility_date = "2024-01-01"
 
 [[kv_namespaces]]
 binding = "RATE_LIMIT_KV"
-id = "3e6e94fdc37e4422a513b3f93e61322e"
+id = "f5068426dcbd42d8a907da7dbcd2b289"
 
 [build]
 command = "cargo install worker-build && worker-build --release"
