@@ -26,6 +26,11 @@ pub fn process_repos(
     let mut involved_map: BTreeMap<String, InvolvedRepo> = BTreeMap::new();
 
     let mut add_involved = |r: &Repo, date: String| {
+        // Skip any repository owned by the user (only collect external contributions)
+        if r.owner.login.eq_ignore_ascii_case(target_user) {
+            return;
+        }
+
         let key = format!("{}/{}", r.owner.login.to_lowercase(), r.name.to_lowercase());
         let primary_lang = r.languages.edges.first().map(|e| e.node.name.clone());
 
