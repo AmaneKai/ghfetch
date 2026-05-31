@@ -26,6 +26,7 @@ pub fn process_repos(
     let mut involved_map: BTreeMap<String, InvolvedRepo> = BTreeMap::new();
 
     let mut add_involved = |r: &Repo, date: String| {
+        // Skip any repository owned by the user (only collect external contributions)
         if r.owner.login.eq_ignore_ascii_case(target_user) {
             return;
         }
@@ -52,6 +53,7 @@ pub fn process_repos(
             .or_insert(new_item);
     };
 
+    // 1. Process private repos (general stats only)
     for r in private {
         let key_name = r.name.to_lowercase();
         if !seen.insert(key_name) {
@@ -75,6 +77,7 @@ pub fn process_repos(
         }
     }
 
+    // 2. Process public repos (general stats only)
     for r in public {
         let key_name = r.name.to_lowercase();
         if !seen.insert(key_name) {
@@ -98,6 +101,7 @@ pub fn process_repos(
         }
     }
 
+    // 3. Process contributed repos (actual personal commit targets)
     for (r, occurred_at) in contributed {
         let key_name = r.name.to_lowercase();
         if seen.insert(key_name) {

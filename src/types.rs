@@ -137,6 +137,8 @@ pub struct Repo {
     pub languages: LangConn,
     #[serde(rename = "pushedAt")]
     pub pushed_at: Option<String>,
+    #[serde(rename = "isPrivate")]
+    pub is_private: bool,
 }
 
 #[derive(Deserialize, Clone)]

@@ -155,15 +155,37 @@ async fn handle_stats(req: Request, env: Env, ctx: worker::Context) -> Result<Re
         }
     };
 
-    let gql_user = match gql.data {
+    let mut gql_user = match gql.data {
         Some(d) => d.user,
         None => return err(404, "User not found", None),
+    };
+
+    // --- Privacy Filter Logic ---
+    let headers = req.headers();
+    let origin_str = headers.get("Origin").unwrap_or(None).unwrap_or_default();
+    let referer_str = headers.get("Referer").unwrap_or(None).unwrap_or_default();
+
+    let portfolio_domain = env
+        .secret("PORTFOLIO_ORIGIN")
+        .map(|s| s.to_string())
+        .unwrap_or_else(|_| "carlosranara.com".to_string());
+
+    let is_portfolio_request = origin_str.contains(&portfolio_domain)
+        || referer_str.contains(&portfolio_domain)
+        || origin_str.contains("localhost")
+        || referer_str.contains("localhost");
+
+    let private_repos = if is_portfolio_request {
+        std::mem::take(&mut gql_user.repositories.nodes)
+    } else {
+        Vec::new()
     };
 
     let contributed: Vec<_> = gql_user
         .contributions_collection
         .commit_contributions_by_repository
         .iter()
+        .filter(|c| is_portfolio_request || !c.repository.is_private)
         .map(|c| {
             let occurred_at = c
                 .contributions
@@ -176,7 +198,7 @@ async fn handle_stats(req: Request, env: Env, ctx: worker::Context) -> Result<Re
 
     let processed = process_repos(
         user.as_str(),
-        &gql_user.repositories.nodes,
+        &private_repos,
         &gql_user.public_repositories.nodes,
         &contributed,
     );
