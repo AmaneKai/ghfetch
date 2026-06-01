@@ -173,6 +173,29 @@ mod processor_tests {
     }
 
     #[test]
+    fn includes_owned_repos_in_involved() {
+        let owned = vec![make_repo("owned-repo", 10, "user", vec![])];
+        let processed = process_repos("user", &owned, &[], &[]);
+        
+        assert_eq!(processed.involved_repos.len(), 1);
+        let repo = &processed.involved_repos[0];
+        assert_eq!(repo.name, "owned-repo");
+        assert!(repo.is_owned);
+    }
+
+    #[test]
+    fn marks_external_repos_as_not_owned() {
+        let external = make_repo("other", 100, "someone-else", vec![]);
+        let contributed = vec![(external, Some("2026-05-01T00:00:00Z".to_string()))];
+        let processed = process_repos("user", &[], &[], &contributed);
+        
+        assert_eq!(processed.involved_repos.len(), 1);
+        let repo = &processed.involved_repos[0];
+        assert_eq!(repo.owner, "someone-else");
+        assert!(!repo.is_owned);
+    }
+
+    #[test]
     fn handles_empty_repos() {
         let processed = process_repos("user", &[], &[], &[]);
         assert_eq!(processed.repo_count, 0);

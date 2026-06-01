@@ -45,4 +45,5 @@ pub struct InvolvedRepo {
     pub last_contributed_at: String,
     pub stars: u32,
     pub primary_language: Option<String>,
+    pub is_owned: bool,
 }

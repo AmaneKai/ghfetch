@@ -26,10 +26,7 @@ pub fn process_repos(
     let mut involved_map: BTreeMap<String, InvolvedRepo> = BTreeMap::new();
 
     let mut add_involved = |r: &Repo, date: String| {
-        // Skip any repository owned by the user (only collect external contributions)
-        if r.owner.login.eq_ignore_ascii_case(target_user) {
-            return;
-        }
+        let is_owned = r.owner.login.eq_ignore_ascii_case(target_user);
 
         let key = format!("{}/{}", r.owner.login.to_lowercase(), r.name.to_lowercase());
         let primary_lang = r.languages.edges.first().map(|e| e.node.name.clone());
@@ -41,6 +38,7 @@ pub fn process_repos(
             last_contributed_at: date,
             stars: r.stargazer_count,
             primary_language: primary_lang,
+            is_owned,
         };
 
         involved_map
@@ -58,6 +56,10 @@ pub fn process_repos(
         let key_name = r.name.to_lowercase();
         if !seen.insert(key_name) {
             continue;
+        }
+
+        if let Some(ref pushed_at) = r.pushed_at {
+            add_involved(r, pushed_at.clone());
         }
 
         total_stars = total_stars.saturating_add(r.stargazer_count);
@@ -82,6 +84,10 @@ pub fn process_repos(
         let key_name = r.name.to_lowercase();
         if !seen.insert(key_name) {
             continue;
+        }
+
+        if let Some(ref pushed_at) = r.pushed_at {
+            add_involved(r, pushed_at.clone());
         }
 
         total_stars = total_stars.saturating_add(r.stargazer_count);
